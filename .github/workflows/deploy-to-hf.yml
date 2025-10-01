@@ -42,6 +42,9 @@ jobs:
         git config --global credential.helper store
         echo "https://user:${HF_TOKEN}@huggingface.co" > ~/.git-credentials
         
+        # Set default branch to main
+        git config --global init.defaultBranch main
+        
         # Initialize git repository
         git init
         git remote add origin https://huggingface.co/spaces/${{ secrets.HUGGINGFACE_SPACE_REPO }}
@@ -64,8 +67,8 @@ jobs:
         git config user.email "actions@github.com"
         git commit -m "Update NemaQuant app from GitHub Actions - ${{ github.sha }}"
         
-        # Push to Hugging Face Space
-        git push origin main
+        # Push to Hugging Face Space (force push to handle initial setup)
+        git push --force origin main
 
     - name: Summary
       run: |
