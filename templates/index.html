@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NemaQuant - Nematode Egg Detection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css">
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+</head>
+<body>
+    <h1>
+        <i class="ri-microscope-line"></i>
+        NemaQuant
+        <small style="display: block; font-size: 1rem; font-weight: normal; color: var(--text-muted);">
+            Automated nematode egg detection and counting
+        </small>
+    </h1>
+
+    <div class="container">
+        <div class="left-panel">
+            <!-- Input Selection -->
+            <div class="card compact">
+                <h2><i class="ri-upload-cloud-line"></i> Input Selection</h2>
+                <div class="form-group">
+                    <label for="input-mode">Input Mode</label>
+                    <select id="input-mode" name="input-mode" class="form-control">
+                        <option value="files">Select Image(s)</option>
+                        <option value="folder">Select Folder</option>
+                        <option value="keyence">Keyence Output Folder</option>
+                    </select>
+                    <small class="input-help" style="color: var(--text-muted); margin-top: 0.25rem; display: block;">
+                        <span id="input-mode-help">Choose one or more image files for processing</span>
+                    </small>
+                </div>
+
+                <div class="file-upload" id="drop-zone">
+                    <input type="file" id="file-input" name="files" accept="image/*" multiple hidden>
+                    <i class="ri-upload-cloud-2-line" style="font-size: 2rem; color: var(--primary-color);"></i>
+                    <p class="file-upload-text">
+                        <span id="upload-text">Drag and drop images here or click to browse</span>
+                        <br>
+                        <small style="color: var(--text-muted);">Supported formats: PNG, JPG, TIFF</small>
+                    </p>
+                    <div id="file-list" class="file-list"></div>
+                </div>
+            </div>
+
+            <!-- Processing -->
+            <div class="card compact">
+                <h2><i class="ri-settings-4-line"></i> Processing</h2>
+                <div class="progress-container">
+                    <div class="progress-info">
+                        <span id="progress-text">Ready to process</span>
+                        <div>
+                            <span id="image-counter" style="margin-right: 1rem;"></span>
+                            <span id="progress-percentage">0%</span>
+                        </div>
+                    </div>
+                    <progress id="progress" value="0" max="100"></progress>
+                </div>
+                <button id="start-processing" class="btn-primary">
+                    <i class="ri-play-line"></i>
+                    Start Processing
+                </button>
+            </div>
+
+            <!-- Confidence Threshold -->
+            <div class="card compact">
+                <h2><i class="ri-equalizer-line"></i> Confidence Threshold
+                    <i class="ri-information-line" 
+                        data-tooltip="Cutoff value used to filter egg detections. 
+                        Recommended range: 0.4 - 0.7. 
+                    Higher values reduce the number of false positives but produce more false negatives."
+                        style="margin-left: 0.5rem;"></i>
+                </h2>
+                <div class="form-group">
+                    <div class="range-with-value" style="width:100%; display:flex; flex-direction:row; align-items:center; gap:1em;">
+                        <input type="range" id="confidence-threshold" name="confidence-threshold" 
+                            min="0.05" max="0.95" step="0.05" value="0.6" list="confidence-ticks" style="width:100%;" autocomplete="off">
+                        <datalist id="confidence-ticks">
+                            <option value="0.05" label="0.05"></option>
+                            <option value="0.10"></option>
+                            <option value="0.15"></option>
+                            <option value="0.20"></option>
+                            <option value="0.25"></option>
+                            <option value="0.30"></option>
+                            <option value="0.35"></option>
+                            <option value="0.40"></option>
+                            <option value="0.45"></option>
+                            <option value="0.50" label="0.50"></option>
+                            <option value="0.55"></option>
+                            <option value="0.60"></option>
+                            <option value="0.65"></option>
+                            <option value="0.70"></option>
+                            <option value="0.75"></option>
+                            <option value="0.80"></option>
+                            <option value="0.85"></option>
+                            <option value="0.90"></option>
+                            <option value="0.95" label="0.95"></option>
+                        </datalist>
+                        <span id="confidence-value" style="font-size:1.1em; min-width:2.5em; text-align:right;">0.6</span>
+                    </div>
+                </div>
+                <div id="total-eggs-detected" style="margin-top:0.5em; font-size:1.1em; color:var(--text-muted);">
+                    Total Eggs Detected: <span id="total-eggs-count">0</span>
+                </div>
+                <div id="confidence-plot" style="margin-top:1.5rem;"></div>
+            </div>
+
+            <!-- Status Log -->
+            <div class="card compact">
+                <h2>
+                    <i class="ri-terminal-box-line"></i>
+                    Status Log
+                    <button id="clear-log" class="btn-secondary" style="margin-left: auto; padding: 0.25rem 0.5rem;">
+                        <i class="ri-delete-bin-line"></i>
+                    </button>
+                </h2>
+                <div id="status-output" class="status-log"></div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <!-- Image Preview -->
+            <div class="card preview-section">
+                <h2>
+                    <i class="ri-image-edit-line"></i>
+                    Image Preview
+                    <div class="export-buttons">
+                        <button id="export-csv" class="btn-secondary" disabled>
+                            <i class="ri-file-excel-line"></i>
+                            Export CSV
+                        </button>
+                        <button id="export-images" class="btn-secondary" disabled>
+                            <i class="ri-image-line"></i>
+                            Export Images
+                        </button>
+                    </div>
+                </h2>
+                
+                <div class="image-preview" id="image-container">
+                    <img id="preview-image" src="" alt="Preview will appear here">
+                </div>
+                
+                <div class="image-info" id="image-info">
+                    Select an image from the results to view
+                </div>
+                
+                <div class="image-controls">
+                    <button id="prev-image" class="btn-secondary" disabled>
+                        <i class="ri-arrow-left-s-line"></i>
+                        Previous
+                    </button>
+                    <button id="zoom-out" class="btn-secondary" disabled>
+                        <i class="ri-zoom-out-line"></i>
+                    </button>
+                    <button id="zoom-in" class="btn-secondary" disabled>
+                        <i class="ri-zoom-in-line"></i>
+                    </button>
+                    <button id="next-image" class="btn-secondary" disabled>
+                        Next
+                        <i class="ri-arrow-right-s-line"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div class="card">
+                <h2>
+                    <i class="ri-file-list-3-line"></i>
+                    Results
+                </h2>
+
+                <div class="table-container">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th data-sort="filename">
+                                    Filename
+                                    <i class="ri-arrow-up-down-line sort-icon"></i>
+                                </th>
+                                <th data-sort="num_eggs">
+                                    Eggs Detected
+                                    <i class="ri-arrow-up-down-line sort-icon"></i>
+                                </th>
+                                <th class="text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Results will be populated here -->
+                        </tbody>
+                    </table>
+                    
+                    <!-- Pagination controls -->
+                    <div id="pagination-controls" class="pagination-container">
+                        <!-- Pagination buttons will be generated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

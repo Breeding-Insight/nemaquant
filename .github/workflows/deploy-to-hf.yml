@@ -1,0 +1,74 @@
+name: Deploy to Hugging Face Spaces
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        pip install huggingface_hub
+
+    - name: Login to Hugging Face
+      uses: huggingface/huggingface_hub@v0.19.0
+      with:
+        token: ${{ secrets.HUGGINGFACE_TOKEN }}
+
+    - name: Push to Hugging Face Space
+      run: |
+        # Check if HUGGINGFACE_SPACE_REPO is set
+        if [ -z "${{ secrets.HUGGINGFACE_SPACE_REPO }}" ]; then
+          echo "HUGGINGFACE_SPACE_REPO secret not set. Please set it to your space repository name (e.g., 'username/nemaquant')"
+          exit 1
+        fi
+        
+        # Create a temporary directory for the space
+        mkdir -p space_repo
+        cd space_repo
+        
+        # Initialize git repository
+        git init
+        git remote add origin https://huggingface.co/spaces/${{ secrets.HUGGINGFACE_SPACE_REPO }}
+        
+        # Copy necessary files
+        cp ../README.md .
+        cp ../app.py .
+        cp ../requirements.txt .
+        cp ../Dockerfile .
+        cp ../yolo_utils.py .
+        cp -r ../templates .
+        cp -r ../static .
+        
+        # Create .gitattributes for LFS if needed
+        echo "*.pt filter=lfs diff=lfs merge=lfs -text" > .gitattributes
+        
+        # Add and commit
+        git add .
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git commit -m "Update NemaQuant app from GitHub Actions - ${{ github.sha }}"
+        
+        # Push to Hugging Face Space
+        git push origin main
+
+    - name: Summary
+      run: |
+        echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Hugging Face Space**: \`https://huggingface.co/spaces/${{ secrets.HUGGINGFACE_SPACE_REPO }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: Successfully deployed to HF Spaces" >> $GITHUB_STEP_SUMMARY
