@@ -63,6 +63,7 @@ jobs:
         echo "*.h5 filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
         echo "*.onnx filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
         
+        
         # Copy necessary files
         cp ../README.md .
         cp ../app.py .
