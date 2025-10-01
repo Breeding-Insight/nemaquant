@@ -24,12 +24,9 @@ jobs:
       run: |
         pip install huggingface_hub
 
-    - name: Login to Hugging Face
-      uses: huggingface/huggingface_hub@v0.19.0
-      with:
-        token: ${{ secrets.HUGGINGFACE_TOKEN }}
-
     - name: Push to Hugging Face Space
+      env:
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       run: |
         # Check if HUGGINGFACE_SPACE_REPO is set
         if [ -z "${{ secrets.HUGGINGFACE_SPACE_REPO }}" ]; then
@@ -40,6 +37,10 @@ jobs:
         # Create a temporary directory for the space
         mkdir -p space_repo
         cd space_repo
+        
+        # Configure git credentials for Hugging Face
+        git config --global credential.helper store
+        echo "https://user:${HF_TOKEN}@huggingface.co" > ~/.git-credentials
         
         # Initialize git repository
         git init
