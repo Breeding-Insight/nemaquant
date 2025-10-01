@@ -40,16 +40,13 @@ jobs:
           exit 1
         fi
         
-        # Create a temporary directory for the space
-        mkdir -p space_repo
-        cd space_repo
-        
         # Configure git credentials for Hugging Face
         git config --global credential.helper store
         echo "https://user:${HF_TOKEN}@huggingface.co" > ~/.git-credentials
         
-        # Set default branch to main
-        git config --global init.defaultBranch main
+        # Create a temporary directory for the space
+        mkdir -p space_repo
+        cd space_repo
         
         # Initialize git repository with LFS
         git init
@@ -63,7 +60,6 @@ jobs:
         echo "*.h5 filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
         echo "*.onnx filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
         
-        
         # Copy necessary files
         cp ../README.md .
         cp ../app.py .
@@ -73,11 +69,14 @@ jobs:
         cp -r ../templates .
         cp -r ../static .
         
-        # Copy model weights if they exist
-        if [ -f ../weights.pt ]; then
-          echo "Found weights.pt, copying..."
-          cp ../weights.pt .
-        fi
+        # Copy all .pt and .onnx files from the root directory
+        echo "Checking for model files..."
+        find .. -maxdepth 1 -type f -name "*.pt" -exec cp {} . \;
+        find .. -maxdepth 1 -type f -name "*.onnx" -exec cp {} . \;
+        
+        # List what we're about to commit
+        echo "Files to be committed:"
+        ls -lh
         
         # Add and commit
         git add .gitattributes
@@ -87,7 +86,7 @@ jobs:
         git commit -m "Update NemaQuant app from GitHub Actions - ${{ github.sha }}"
         
         # Push to Hugging Face Space (force push to handle initial setup)
-        git push --force origin main
+        git push --force origin master
 
     - name: Summary
       run: |
@@ -95,8 +94,11 @@ jobs:
         echo "- **Hugging Face Space**: \`https://huggingface.co/spaces/${{ secrets.HUGGINGFACE_SPACE_REPO }}\`" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
         echo "- **Status**: Successfully deployed to HF Spaces" >> $GITHUB_STEP_SUMMARY
-        if [ -f space_repo/weights.pt ]; then
-          echo "- **Model weights**: Included via Git LFS" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- **Model weights**: Not found (add weights.pt to enable)" >> $GITHUB_STEP_SUMMARY
-        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Model Files:" >> $GITHUB_STEP_SUMMARY
+        cd space_repo
+        for file in *.pt *.onnx; do
+          if [ -f "$file" ]; then
+            echo "- ✅ $file ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
+          fi
+        done
