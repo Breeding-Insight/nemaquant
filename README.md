@@ -64,14 +64,14 @@ Process 500 images for:
 
 ## Technical Requirements
 
-- Python 3.9+
+- Python 3.11+
 - Key Dependencies:
-  - Flask >= 2.0.0
-  - PyTorch >= 2.0.0
-  - Ultralytics >= 8.0.0
-  - OpenCV Python >= 4.7.0
-  - Pandas >= 1.5.0
-  - NumPy >= 1.21.0
+  - Flask = 3.1.1
+  - PyTorch = 2.7.1
+  - Ultralytics = 8.3.170
+  - OpenCV Python = 4.12.0.88
+  - Pandas = 2.3.1
+  - NumPy = 2.2.6
 
 ## Setup and Deployment
 
@@ -92,7 +92,13 @@ Process 500 images for:
    - Place your `weights.pt` file in the root directory
    - Ensure it's a compatible YOLO model trained for egg detection
 
-4. **Run the Application**:
+4. **Setup Environment**:
+   ```bash
+   mkdir -p uploads results annotated .yolo_config
+   export YOLO_CONFIG_DIR="$PWD/.yolo_config"
+   ```
+
+5. **Run the Application**:
    ```bash
    python app.py
    ```
