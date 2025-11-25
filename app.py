@@ -39,8 +39,8 @@ ANNOT_FOLDER = APP_ROOT / 'annotated'
 WEIGHTS_FILE = APP_ROOT / 'weights.pt'
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['RESULTS_FOLDER'] = str(RESULTS_FOLDER)
-app.config['WEIGHTS_FILE'] = str(WEIGHTS_FILE)
 app.config['ANNOT_FOLDER'] = str(ANNOT_FOLDER)
+app.config['WEIGHTS_FILE'] = str(WEIGHTS_FILE)
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'tif', 'tiff'}
 
 # skip these -- created dirs in dockerfile
@@ -235,6 +235,7 @@ def get_progress():
                         with open(pkl_file, 'rb') as pf:
                             all_results[uuid_base] = pickle.load(pf)
                     resp['results'] = all_results
+                    print(f"Job executed successfully! {len(all_results)} results aggregated.")
                     return jsonify(resp)
                 
             # If still processing, update progress
@@ -283,7 +284,6 @@ def annotate_image():
 
         if not img_name:
             return jsonify({'error': 'File not found'}), 404
-
         # Load detections from pickle
         result_path = Path(app.config['RESULTS_FOLDER']) / session_id / f"{uuid}.pkl"
         if not result_path.exists():
@@ -367,14 +367,28 @@ def export_csv():
     try:
         data = request.json
         session_id = session['id']
-        threshold = float(data.get('confidence', 0.5))
         job_state = session.get('job_state')
+        filename_map = session.get('filename_map')
+        threshold = float(data.get('confidence', 0.5))
         if not job_state:
             return jsonify({'error': 'Job not found'}), 404
+        
+        # iterate through the results
+        results_dir = Path(app.config['RESULTS_FOLDER']) / session_id
+        pkl_paths = list(results_dir.glob('*.pkl'))
+        all_results = {}
+        for path in pkl_paths:
+            uuid_base = path.stem
+            with open(path, 'rb') as pf:
+                all_results[uuid_base] = pickle.load(pf)
+
+        # populate rows for CSV conversion
         rows = []
-        for orig_name, detections in job_state['detections'].items():
-            count = sum(1 for d in detections if d['score'] >= threshold)
-            rows.append({'Filename': orig_name, 'EggsDetected': count})
+        for uuid in all_results.keys():
+            count = sum(1 for d in all_results[uuid] if d['score'] >= threshold)
+            rows.append({'Filename': filename_map[uuid], 'EggsDetected': count})
+        rows = sorted(rows, key=lambda x: x['Filename'].lower())
+        # write the CSV out
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=['Filename', 'EggsDetected'])
