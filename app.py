@@ -386,12 +386,12 @@ def export_csv():
         rows = []
         for uuid in all_results.keys():
             count = sum(1 for d in all_results[uuid] if d['score'] >= threshold)
-            rows.append({'Filename': filename_map[uuid], 'EggsDetected': count})
+            rows.append({'Filename': filename_map[uuid], 'EggsDetected': count, 'ConfidenceThreshold': threshold})
         rows = sorted(rows, key=lambda x: x['Filename'].lower())
         # write the CSV out
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=['Filename', 'EggsDetected'])
+        writer = csv.DictWriter(output, fieldnames=['Filename', 'EggsDetected', 'ConfidenceThreshold'])
         writer.writeheader()
         writer.writerows(rows)
         output.seek(0)
