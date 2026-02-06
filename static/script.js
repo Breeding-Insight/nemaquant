@@ -118,29 +118,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 showSingleCsvDialog(csvFiles[0]);
                 return;
             } else if (csvFiles.length === 0) {
-                const wantToUpload = window.confirm('No CSV key file was found in the folder. Would you like to supply a CSV key file now?');
-                if (wantToUpload) {
-                    // Create a hidden file input for CSV upload
-                    let csvInput = document.createElement('input');
-                    csvInput.type = 'file';
-                    csvInput.accept = '.csv,.CSV';
-                    csvInput.style.display = 'none';
-                    document.body.appendChild(csvInput);
-                    csvInput.addEventListener('change', function() {
-                        if (csvInput.files && csvInput.files.length === 1) {
-                            window.selectedKeyenceCsv = csvInput.files[0];
-                            logStatus(`CSV key file supplied: ${csvInput.files[0].name}`);
-                        } else {
-                            window.selectedKeyenceCsv = null;
-                            logStatus('No CSV key file supplied.');
-                        }
-                        document.body.removeChild(csvInput);
-                    });
-                    csvInput.click();
-                } else {
-                    window.selectedKeyenceCsv = null;
-                    logStatus('No CSV key file will be used.');
-                }
+                showNoCsvDialog();
+                return;
             } else {
                 // Multiple CSVs found, show a custom dialog for selection
                 showCsvSelectionDialog(csvFiles);
@@ -1310,8 +1289,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Custom dialog for selecting among multiple CSV files
-    function showCsvSelectionDialog(csvFiles) {
-        // Create overlay
+    function createDialogOverlay(titleText, messageContent) {
         const overlay = document.createElement('div');
         overlay.style.position = 'fixed';
         overlay.style.top = 0;
@@ -1324,77 +1302,93 @@ document.addEventListener('DOMContentLoaded', () => {
         overlay.style.alignItems = 'center';
         overlay.style.justifyContent = 'center';
 
-        // Create dialog box
         const dialog = document.createElement('div');
         dialog.style.background = '#fff';
         dialog.style.padding = '24px 32px';
         dialog.style.borderRadius = '8px';
         dialog.style.boxShadow = '0 2px 16px rgba(0,0,0,0.2)';
         dialog.style.minWidth = '320px';
-        dialog.innerHTML = `<h3>Select a CSV key file</h3><p>Multiple CSV files were found. Please select one to use as the key file:</p>`;
+        const title = document.createElement('h3');
+        title.textContent = titleText;
+        const message = document.createElement('p');
+        if (typeof messageContent === 'string') {
+            message.textContent = messageContent;
+        } else if (messageContent) {
+            message.appendChild(messageContent);
+        }
+        dialog.appendChild(title);
+        dialog.appendChild(message);
+
+        return { overlay, dialog };
+    }
+
+    function createDialogButton(label, onClick, margin = '8px 0') {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.style.display = 'block';
+        btn.style.margin = margin;
+        btn.onclick = onClick;
+        return btn;
+    }
+
+    function openCsvPicker(onComplete) {
+        let csvInput = document.createElement('input');
+        csvInput.type = 'file';
+        csvInput.accept = '.csv,.CSV';
+        csvInput.style.display = 'none';
+        document.body.appendChild(csvInput);
+        csvInput.addEventListener('change', function() {
+            if (csvInput.files && csvInput.files.length === 1) {
+                window.selectedKeyenceCsv = csvInput.files[0];
+                logStatus(`CSV key file supplied: ${csvInput.files[0].name}`);
+            } else {
+                window.selectedKeyenceCsv = null;
+                logStatus('No CSV key file supplied.');
+            }
+            document.body.removeChild(csvInput);
+            if (onComplete) onComplete();
+        });
+        csvInput.click();
+    }
+
+    function showCsvSelectionDialog(csvFiles) {
+        const { overlay, dialog } = createDialogOverlay(
+            'Select a CSV key file',
+            'Multiple CSV files were found. Please select one to use as the key file:'
+        );
 
         // List CSV files as buttons
         csvFiles.forEach((file, idx) => {
-            const btn = document.createElement('button');
-            btn.textContent = file.name;
-            btn.style.display = 'block';
-            btn.style.margin = '8px 0';
-            btn.onclick = () => {
+            const btn = createDialogButton(file.name, () => {
                 window.selectedKeyenceCsv = file;
                 logStatus(`CSV key file selected: ${file.name}`);
                 document.body.removeChild(overlay);
-            };
+            });
             dialog.appendChild(btn);
         });
 
         // Option: Use a different .csv
-        const otherBtn = document.createElement('button');
-        otherBtn.textContent = 'Use a different .csv';
-        otherBtn.style.display = 'block';
-        otherBtn.style.margin = '16px 0 8px 0';
-        otherBtn.onclick = () => {
-            let csvInput = document.createElement('input');
-            csvInput.type = 'file';
-            csvInput.accept = '.csv,.CSV';
-            csvInput.style.display = 'none';
-            document.body.appendChild(csvInput);
-            csvInput.addEventListener('change', function() {
-                if (csvInput.files && csvInput.files.length === 1) {
-                    window.selectedKeyenceCsv = csvInput.files[0];
-                    logStatus(`CSV key file supplied: ${csvInput.files[0].name}`);
-                } else {
-                    window.selectedKeyenceCsv = null;
-                    logStatus('No CSV key file supplied.');
-                }
-                document.body.removeChild(csvInput);
+        const otherBtn = createDialogButton('Use a different .csv', () => {
+            openCsvPicker(() => {
                 document.body.removeChild(overlay);
             });
-            csvInput.click();
-        };
+        }, '16px 0 8px 0');
         dialog.appendChild(otherBtn);
 
         // Option: No key file
-        const noneBtn = document.createElement('button');
-        noneBtn.textContent = 'No key file';
-        noneBtn.style.display = 'block';
-        noneBtn.style.margin = '8px 0';
-        noneBtn.onclick = () => {
+        const noneBtn = createDialogButton('No key file', () => {
             window.selectedKeyenceCsv = null;
             logStatus('No CSV key file will be used.');
             document.body.removeChild(overlay);
-        };
+        });
         dialog.appendChild(noneBtn);
 
         // Cancel button
-        const cancelBtn = document.createElement('button');
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.style.display = 'block';
-        cancelBtn.style.margin = '8px 0';
-        cancelBtn.onclick = () => {
+        const cancelBtn = createDialogButton('Cancel', () => {
             // Do not change selection, just close dialog
             logStatus('CSV key file selection cancelled.');
             document.body.removeChild(overlay);
-        };
+        });
         dialog.appendChild(cancelBtn);
 
         overlay.appendChild(dialog);
@@ -1403,86 +1397,79 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Custom dialog for single CSV file found
     function showSingleCsvDialog(csvFile) {
-        const overlay = document.createElement('div');
-        overlay.style.position = 'fixed';
-        overlay.style.top = 0;
-        overlay.style.left = 0;
-        overlay.style.width = '100vw';
-        overlay.style.height = '100vh';
-        overlay.style.background = 'rgba(0,0,0,0.4)';
-        overlay.style.zIndex = 9999;
-        overlay.style.display = 'flex';
-        overlay.style.alignItems = 'center';
-        overlay.style.justifyContent = 'center';
+        const messageFragment = document.createDocumentFragment();
+        messageFragment.append('A CSV file named ');
+        const fileNameStrong = document.createElement('strong');
+        fileNameStrong.textContent = csvFile.name;
+        messageFragment.appendChild(fileNameStrong);
+        messageFragment.append(' was found in the folder. Would you like to use this as the key file for this folder?');
 
-        const dialog = document.createElement('div');
-        dialog.style.background = '#fff';
-        dialog.style.padding = '24px 32px';
-        dialog.style.borderRadius = '8px';
-        dialog.style.boxShadow = '0 2px 16px rgba(0,0,0,0.2)';
-        dialog.style.minWidth = '320px';
-        dialog.innerHTML = `<h3>CSV File Found</h3><p>A CSV file named <strong>${csvFile.name}</strong> was found in the folder. Would you like to use this as the key file for this folder?</p>`;
+        const { overlay, dialog } = createDialogOverlay(
+            'CSV File Found',
+            messageFragment
+        );
 
         // Yes button
-        const yesBtn = document.createElement('button');
-        yesBtn.textContent = 'Yes';
-        yesBtn.style.display = 'block';
-        yesBtn.style.margin = '8px 0';
-        yesBtn.onclick = () => {
+        const yesBtn = createDialogButton('Yes', () => {
             window.selectedKeyenceCsv = csvFile;
             logStatus(`CSV key file selected: ${csvFile.name}`);
             document.body.removeChild(overlay);
-        };
+        });
         dialog.appendChild(yesBtn);
 
         // Use a different .csv file
-        const otherBtn = document.createElement('button');
-        otherBtn.textContent = 'Use a different .csv file';
-        otherBtn.style.display = 'block';
-        otherBtn.style.margin = '8px 0';
-        otherBtn.onclick = () => {
-            let csvInput = document.createElement('input');
-            csvInput.type = 'file';
-            csvInput.accept = '.csv,.CSV';
-            csvInput.style.display = 'none';
-            document.body.appendChild(csvInput);
-            csvInput.addEventListener('change', function() {
-                if (csvInput.files && csvInput.files.length === 1) {
-                    window.selectedKeyenceCsv = csvInput.files[0];
-                    logStatus(`CSV key file supplied: ${csvInput.files[0].name}`);
-                } else {
-                    window.selectedKeyenceCsv = null;
-                    logStatus('No CSV key file supplied.');
-                }
-                document.body.removeChild(csvInput);
+        const otherBtn = createDialogButton('Use a different .csv file', () => {
+            openCsvPicker(() => {
                 document.body.removeChild(overlay);
             });
-            csvInput.click();
-        };
+        });
         dialog.appendChild(otherBtn);
 
         // Do not use a key file
-        const noneBtn = document.createElement('button');
-        noneBtn.textContent = 'Do not use a key file';
-        noneBtn.style.display = 'block';
-        noneBtn.style.margin = '8px 0';
-        noneBtn.onclick = () => {
+        const noneBtn = createDialogButton('Do not use a key file', () => {
             window.selectedKeyenceCsv = null;
             logStatus('No CSV key file will be used.');
             document.body.removeChild(overlay);
-        };
+        });
         dialog.appendChild(noneBtn);
 
         // Cancel button
-        const cancelBtn = document.createElement('button');
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.style.display = 'block';
-        cancelBtn.style.margin = '8px 0';
-        cancelBtn.onclick = () => {
+        const cancelBtn = createDialogButton('Cancel', () => {
             // Do not change selection, just close dialog
             logStatus('CSV key file selection cancelled.');
             document.body.removeChild(overlay);
-        };
+        });
+        dialog.appendChild(cancelBtn);
+
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+    }
+
+    // Custom dialog for no CSV file found
+    function showNoCsvDialog() {
+        const { overlay, dialog } = createDialogOverlay(
+            'No CSV Key File Found',
+            'No CSV key file was found in the folder. Would you like to supply one now?'
+        );
+
+        const uploadBtn = createDialogButton('Upload a CSV key file', () => {
+            openCsvPicker(() => {
+                document.body.removeChild(overlay);
+            });
+        });
+        dialog.appendChild(uploadBtn);
+
+        const noneBtn = createDialogButton('No key file', () => {
+            window.selectedKeyenceCsv = null;
+            logStatus('No CSV key file will be used.');
+            document.body.removeChild(overlay);
+        });
+        dialog.appendChild(noneBtn);
+
+        const cancelBtn = createDialogButton('Cancel', () => {
+            logStatus('CSV key file selection cancelled.');
+            document.body.removeChild(overlay);
+        });
         dialog.appendChild(cancelBtn);
 
         overlay.appendChild(dialog);
