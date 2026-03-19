@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 import traceback
 import sys
 import time
@@ -54,6 +55,7 @@ APP_ROOT = Path(__file__).parent
 UPLOAD_FOLDER = Path('/tmp/nemaquant/uploads')
 RESULTS_FOLDER = Path('/tmp/nemaquant/results')
 ANNOT_FOLDER = Path('/tmp/nemaquant/annotated')
+SESSION_META_FOLDER = Path('/tmp/nemaquant/sessions')
 WEIGHTS_FILE = APP_ROOT / 'weights.pt'
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['RESULTS_FOLDER'] = str(RESULTS_FOLDER)
@@ -65,11 +67,33 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'tif', 'tiff'}
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
 ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
+SESSION_META_FOLDER.mkdir(parents=True, exist_ok=True)
 # YOLO_CONFIG_DIR points to /tmp/nemaquant/.yolo_config (set in Dockerfile ENV).
 # Create it here so ultralytics can write its cache on read-only container filesystems
 # (e.g. Apptainer SIF images).
 Path(os.environ.get('YOLO_CONFIG_DIR', '/tmp/nemaquant/.yolo_config')).mkdir(parents=True, exist_ok=True)
 print(f"Data root: /tmp/nemaquant | Weights: {WEIGHTS_FILE}")
+
+# ---------------------------------------------------------------------------
+# Session metadata helpers
+# Flask's client-side cookie is limited to ~4KB. When many images are
+# uploaded, filename_map / uuid_map_to_uuid_imgname can overflow.
+# We persist them to disk so every route can recover them even when the
+# cookie is absent or truncated (e.g. large batches, Apptainer --cleanenv,
+# multi-worker gunicorn).
+# ---------------------------------------------------------------------------
+def _save_session_meta(session_id, filename_map, uuid_map):
+    meta_dir = SESSION_META_FOLDER / session_id
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    with open(meta_dir / 'meta.json', 'w') as fh:
+        json.dump({'filename_map': filename_map, 'uuid_map_to_uuid_imgname': uuid_map}, fh)
+
+def _load_session_meta(session_id):
+    meta_path = SESSION_META_FOLDER / session_id / 'meta.json'
+    if meta_path.exists():
+        with open(meta_path) as fh:
+            return json.load(fh)
+    return {}
 
 # Load model once at startup, use CUDA if available
 MODEL_DEVICE = 'cuda' if cuda.is_available() else 'cpu'
@@ -118,6 +142,8 @@ def upload_files():
         uuid_map_to_uuid_imgname[uuid_base] = uuid_name
     session['filename_map'] = filename_map
     session['uuid_map_to_uuid_imgname'] = uuid_map_to_uuid_imgname
+    # Persist to disk — cookie may be silently dropped if it exceeds ~4KB
+    _save_session_meta(session_id, filename_map, uuid_map_to_uuid_imgname)
     return jsonify({'filename_map': filename_map, 'status': 'uploaded'})
 
 # /preview route for serving original uploaded image
@@ -127,7 +153,8 @@ def preview_image():
         data = request.get_json()
         uuid = data.get('uuid')
         session_id = session['id']
-        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
+        _meta = _load_session_meta(session_id)
+        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
         if not img_name:
             print(f"/preview: No img_name found for uuid {uuid}")
@@ -249,10 +276,12 @@ def get_progress():
                     job_state['status'] = 'completed'
                     job_state['progress'] = 100
                     session['job_state'] = job_state
+                    _meta = _load_session_meta(session_id)
+                    _filename_map = session.get('filename_map') or _meta.get('filename_map', {})
                     resp = {
                         'status': 'completed',
                         'progress': 100,
-                        'filename_map': session.get('filename_map', {}),
+                        'filename_map': _filename_map,
                         'session_id': job_state.get('sessionId'),
                         'error': job_state.get('error'),
                     }
@@ -306,9 +335,10 @@ def annotate_image():
         uuid = data.get('uuid')
         confidence = float(data.get('confidence', 0.5))
         session_id = session['id']
-        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
+        _meta = _load_session_meta(session_id)
+        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
-        orig_img_name = session.get('filename_map', {}).get(uuid)
+        orig_img_name = (session.get('filename_map') or _meta.get('filename_map', {})).get(uuid)
 
         if not img_name:
             return jsonify({'error': 'File not found'}), 404
@@ -345,8 +375,9 @@ def export_images():
         data = request.get_json()
         confidence = float(data.get('confidence', 0.5))
         session_id = session['id']
-        filename_map = session.get('filename_map', {})
-        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
+        _meta = _load_session_meta(session_id)
+        filename_map = session.get('filename_map') or _meta.get('filename_map', {})
+        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         # ensure there's a landing spot
         annot_dir = Path(app.config['ANNOT_FOLDER']) / session_id
         annot_dir.mkdir(parents=True, exist_ok=True)
@@ -396,7 +427,8 @@ def export_csv():
         data = request.json
         session_id = session['id']
         job_state = session.get('job_state')
-        filename_map = session.get('filename_map') or {}
+        _meta = _load_session_meta(session_id)
+        filename_map = session.get('filename_map') or _meta.get('filename_map', {})
         threshold = float(data.get('confidence', 0.5))
         if not job_state:
             return jsonify({'error': 'Job not found'}), 404
