@@ -31,6 +31,8 @@ if not _secret_key:
     # On HF Spaces, set FLASK_SECRET_KEY as a Space secret to avoid session loss between workers.
     _secret_key = str(uuid.uuid4())
     print("WARNING: FLASK_SECRET_KEY not set — using random key. Sessions will break across workers/restarts.")
+else:
+    print(f"INFO: FLASK_SECRET_KEY is set (length={len(_secret_key)})")
 app.secret_key = _secret_key
 
 # disable werkzeug logging - too noisy
