@@ -18,3 +18,4 @@ Add new versions on top of olders.
     - `build-images.yml`: builds and pushes both CPU and GPU images to Docker Hub on push to `main`, tagged with version from `CHANGELOG.md` and `latest`
     - `deploy-to-hf.yml`: syncs app files and model weights to Hugging Face Space on push to `main`, using Git LFS for weight files
 - Added `update-dockerhub-meta.yml` to make a pretty Dockerhub description based on the `README.md`
+- Fixed `uploads/`, `results/`, `annotated/` directories not being created at runtime on HF Spaces — re-enabled `mkdir` calls in `app.py` at startup (HF container filesystem can overlay image build dirs)

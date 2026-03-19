@@ -108,13 +108,23 @@ Process 500 images for:
 ### Docker Deployment
 
 1. **Build the Container**:
+
+- For only CPU usage:
+
    ```bash
-   docker build -t nemaquant-flask .
+   docker pull breedinginsight/nemaquant
+   ```
+
+- For GPU usage:
+
+   ```bash
+   docker pull breedinginsight/nemaquant:latest-gpu
    ```
 
 2. **Run the Container**:
+
    ```bash
-   docker run -p 7860:7860 -v $(pwd)/results:/app/results nemaquant-flask
+   docker run -p 7860:7860 -v $(pwd)/results:/app/results breedinginsight/nemaquant
    ```
 
 ### Hugging Face Spaces Deployment
@@ -191,7 +201,3 @@ Process 500 images for:
 - Time of day (free tier performance varies with overall platform usage)
 
 For most users, the free tier is sufficient for small to medium batches (< 200 images), while the CPU upgrade offers a good balance of cost and performance for larger datasets. GPU options are recommended only for time-sensitive processing of large batches or when processing thousands of images.
-
-## License
-
-[Specify your license here]

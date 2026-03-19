@@ -43,10 +43,10 @@ app.config['ANNOT_FOLDER'] = str(ANNOT_FOLDER)
 app.config['WEIGHTS_FILE'] = str(WEIGHTS_FILE)
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'tif', 'tiff'}
 
-# skip these -- created dirs in dockerfile
-# UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
-# RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
-# ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
+# Create dirs at startup in case the container filesystem overlays the image build dirs
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
+ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 # Load model once at startup, use CUDA if available
 MODEL_DEVICE = 'cuda' if cuda.is_available() else 'cpu'
