@@ -33,14 +33,12 @@ log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 APP_ROOT = Path(__file__).parent
-# On HF Spaces, the app filesystem overlay makes app-root dirs unreliable across requests.
-# Use /tmp (RAM-backed tmpfs, always writable) when running on HF Spaces.
-# Locally, use app root so files persist across container restarts.
-_ON_HF_SPACES = os.environ.get('SPACE_ID') is not None
-_data_root = Path('/tmp/nemaquant') if _ON_HF_SPACES else APP_ROOT
-UPLOAD_FOLDER = _data_root / 'uploads'
-RESULTS_FOLDER = _data_root / 'results'
-ANNOT_FOLDER = _data_root / 'annotated'
+# Use /tmp for runtime data — works reliably on all container platforms.
+# /tmp is RAM-backed tmpfs, always writable, avoids overlay filesystem issues on HF Spaces.
+# Note: /tmp is cleared on container restart (uploads/results are transient by design).
+UPLOAD_FOLDER = Path('/tmp/nemaquant/uploads')
+RESULTS_FOLDER = Path('/tmp/nemaquant/results')
+ANNOT_FOLDER = Path('/tmp/nemaquant/annotated')
 WEIGHTS_FILE = APP_ROOT / 'weights.pt'
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['RESULTS_FOLDER'] = str(RESULTS_FOLDER)
@@ -48,11 +46,11 @@ app.config['ANNOT_FOLDER'] = str(ANNOT_FOLDER)
 app.config['WEIGHTS_FILE'] = str(WEIGHTS_FILE)
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'tif', 'tiff'}
 
-# Create dirs at startup 
+# Create dirs at startup
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
 ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
-print(f"Running on HF Spaces: {_ON_HF_SPACES} | Data root: {_data_root}")
+print(f"Data root: /tmp/nemaquant | Weights: {WEIGHTS_FILE}")
 
 # Load model once at startup, use CUDA if available
 MODEL_DEVICE = 'cuda' if cuda.is_available() else 'cpu'
