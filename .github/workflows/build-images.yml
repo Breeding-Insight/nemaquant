@@ -65,7 +65,7 @@ jobs:
         platforms: linux/amd64
         provenance: false
         sbom: false
-        outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+        push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha,scope=${{ matrix.variant }}

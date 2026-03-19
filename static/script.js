@@ -246,6 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const response = await fetch('/uploads', {
                     method: 'POST',
+                    credentials: 'include',
                     body: formData
                 });
                 if (response.ok) {
@@ -361,6 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/process', {
                 method: 'POST',
+                credentials: 'include',
                 body: formData,
             });
             if (!response.ok) {
@@ -482,12 +484,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isCompleted) {
                 response = await fetch('/annotate', {
                     method: 'POST',
+                    credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ uuid: uuid, confidence })
                 });
             } else {
                 response = await fetch('/preview', {
                     method: 'POST',
+                    credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ uuid: uuid })
                 });
@@ -537,7 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         progressInterval = setInterval(async () => {
             try {
-                const response = await fetch(`/progress`);
+                const response = await fetch('/progress', { credentials: 'include' });
                 if (!response.ok) {
                     let errorText = `Progress check failed: ${response.status}`;
                     try {
@@ -1055,6 +1059,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const resp = await fetch('/export_csv', {
                 method: 'POST',
+                credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ confidence: threshold })
             });
@@ -1092,6 +1097,7 @@ document.addEventListener('DOMContentLoaded', () => {
             logStatus('Preparing annotated images for download...');
             const resp = await fetch('/export_images', {
                 method: 'POST',
+                credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ confidence: threshold })
             });
