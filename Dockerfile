@@ -57,4 +57,4 @@ EXPOSE 7860
 # Use gunicorn for production deployment if preferred over Flask's development server
 # CMD ["gunicorn", "--bind", "0.0.0.0:7860", "app:app"]
 # For simplicity during development and typical HF Spaces use:
-CMD ["python", "app.py"]
+CMD ["python", "/home/user/app/app.py"]

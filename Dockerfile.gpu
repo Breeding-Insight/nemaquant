@@ -45,4 +45,4 @@ ENV YOLO_CONFIG_DIR=$HOME/app/.yolo_config
 
 EXPOSE 7860
 
-CMD ["python", "app.py"]
+CMD ["python", "/home/user/app/app.py"]
