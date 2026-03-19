@@ -237,15 +237,16 @@ def start_processing():
     # (HTTPS proxy / SameSite), so we fall back to the client-supplied id
     # when the cookie-based id doesn't have an upload directory.
     client_session_id = request.form.get('session_id', '')
-    upload_dir_check = Path(app.config['UPLOAD_FOLDER']) / session_id
-    if not upload_dir_check.exists() and client_session_id:
-        fallback_dir = Path(app.config['UPLOAD_FOLDER']) / client_session_id
-        if fallback_dir.exists():
-            print(f"DEBUG /process: cookie session {session_id} has no upload dir; "
-                  f"using client-supplied session {client_session_id}")
+    if client_session_id:
+        # Prefer the client-supplied id unconditionally — it's the authoritative
+        # id from the /uploads call; the cookie may point to a different worker session.
+        client_dir = Path(app.config['UPLOAD_FOLDER']) / client_session_id
+        if client_dir.exists() or not (Path(app.config['UPLOAD_FOLDER']) / session_id).exists():
+            print(f"DEBUG /process: using client-supplied session {client_session_id} "
+                  f"(cookie session was {session_id})")
             session_id = client_session_id
             session['id'] = session_id
-            upload_dir_check = fallback_dir
+    upload_dir_check = Path(app.config['UPLOAD_FOLDER']) / session_id
     print(f"DEBUG /process: session_id={session_id}, upload_dir={upload_dir_check}, exists={upload_dir_check.exists()}")
     print(f"DEBUG /process: /tmp/nemaquant/uploads contents={list(Path(app.config['UPLOAD_FOLDER']).iterdir()) if Path(app.config['UPLOAD_FOLDER']).exists() else 'UPLOAD_FOLDER missing'}")
     job_state = {
@@ -256,15 +257,26 @@ def start_processing():
     session['job_state'] = job_state
     upload_dir = Path(app.config['UPLOAD_FOLDER']) / session_id
     results_dir = Path(app.config['RESULTS_FOLDER']) / session_id
-    # clean out old results if needed
-    if results_dir.exists():
-        shutil.rmtree(results_dir)
-    results_dir.mkdir(parents=True)
-
-    # set up iterable of uploaded files to process
-    arg_list = [(x,results_dir) for x in list(upload_dir.iterdir())]
 
     try:
+        # Fail fast with a clear message if the upload directory is missing
+        if not upload_dir.exists():
+            available = [d.name for d in Path(app.config['UPLOAD_FOLDER']).iterdir()] \
+                if Path(app.config['UPLOAD_FOLDER']).exists() else []
+            msg = (f"Upload directory not found: {upload_dir}. "
+                   f"cookie_session={session['id']}, client_session={request.form.get('session_id','')}, "
+                   f"available={available}")
+            print(f"ERROR /process: {msg}")
+            return jsonify({'error': msg}), 500
+
+        # clean out old results if needed
+        if results_dir.exists():
+            shutil.rmtree(results_dir)
+        results_dir.mkdir(parents=True)
+
+        # set up iterable of uploaded files to process
+        arg_list = [(x, results_dir) for x in list(upload_dir.iterdir())]
+
         if MODEL_DEVICE == 'cuda':
             # GPU: run in a single thread so CUDA is never re-initialised in a
             # forked subprocess (Pool uses fork by default, which breaks CUDA).

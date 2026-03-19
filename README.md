@@ -132,7 +132,7 @@ For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu`
    apptainer run --cleanenv --env PORT=$PORT nemaquant_latest.sif
    ```
 
-For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu`
+For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu` and the option `--nv` for apptainer/singularity run.
 
 2. **Run the Container**:
 
