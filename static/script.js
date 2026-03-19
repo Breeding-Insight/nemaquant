@@ -491,14 +491,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     method: 'POST',
                     credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uuid: uuid, confidence })
+                    body: JSON.stringify({ uuid: uuid, confidence, session_id: uploadSessionId })
                 });
             } else {
                 response = await fetch('/preview', {
                     method: 'POST',
                     credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uuid: uuid })
+                    body: JSON.stringify({ uuid: uuid, session_id: uploadSessionId })
                 });
             }
             if (response.ok) {
@@ -1066,7 +1066,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ confidence: threshold })
+                body: JSON.stringify({ confidence: threshold, session_id: uploadSessionId })
             });
             if (!resp.ok) throw new Error('Failed to export CSV');
             const blob = await resp.blob();
@@ -1104,7 +1104,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ confidence: threshold })
+                body: JSON.stringify({ confidence: threshold, session_id: uploadSessionId })
             });
             if (!resp.ok) throw new Error('Failed to export images');
             const blob = await resp.blob();

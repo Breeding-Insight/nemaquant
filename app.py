@@ -172,7 +172,8 @@ def preview_image():
     try:
         data = request.get_json()
         uuid = data.get('uuid')
-        session_id = session['id']
+        # Prefer client-supplied session_id (cookie may differ on HF Spaces HTTPS proxy)
+        session_id = data.get('session_id') or session['id']
         _meta = _load_session_meta(session_id)
         uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
@@ -395,7 +396,8 @@ def annotate_image():
         data = request.get_json()
         uuid = data.get('uuid')
         confidence = float(data.get('confidence', 0.5))
-        session_id = session['id']
+        # Prefer client-supplied session_id (cookie may differ on HF Spaces HTTPS proxy)
+        session_id = data.get('session_id') or session['id']
         _meta = _load_session_meta(session_id)
         uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
@@ -435,7 +437,7 @@ def export_images():
     try:
         data = request.get_json()
         confidence = float(data.get('confidence', 0.5))
-        session_id = session['id']
+        session_id = data.get('session_id') or session['id']
         _meta = _load_session_meta(session_id)
         filename_map = session.get('filename_map') or _meta.get('filename_map', {})
         uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
@@ -486,7 +488,7 @@ def export_images():
 def export_csv():
     try:
         data = request.json
-        session_id = session['id']
+        session_id = data.get('session_id') or session['id']
         job_state = session.get('job_state')
         _meta = _load_session_meta(session_id)
         filename_map = session.get('filename_map') or _meta.get('filename_map', {})
