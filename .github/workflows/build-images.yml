@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/nemaquant
+  IMAGE: breedinginsight/nemaquant  # Docker Hub org/image
 
 jobs:
   build:

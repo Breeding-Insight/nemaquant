@@ -26,18 +26,22 @@ jobs:
           echo "ERROR: HUGGINGFACE_TOKEN secret is not set." >&2
           exit 1
         fi
+        if [ -z "${{ secrets.HUGGINGFACE_USERNAME }}" ]; then
+          echo "ERROR: HUGGINGFACE_USERNAME secret is not set." >&2
+          exit 1
+        fi
 
     - name: Configure git
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         git config --global credential.helper store
-        echo "https://user:${{ secrets.HUGGINGFACE_TOKEN }}@huggingface.co" > ~/.git-credentials
+        echo "https://${{ secrets.HUGGINGFACE_USERNAME }}:${{ secrets.HUGGINGFACE_TOKEN }}@huggingface.co" > ~/.git-credentials
         git lfs install
 
     - name: Clone existing HF Space
       run: |
-        git clone https://huggingface.co/spaces/${{ env.HF_SPACE_REPO }} space_repo
+        git clone https://${{ secrets.HUGGINGFACE_USERNAME }}:${{ secrets.HUGGINGFACE_TOKEN }}@huggingface.co/spaces/${{ env.HF_SPACE_REPO }} space_repo
         cd space_repo
         git lfs install
 
