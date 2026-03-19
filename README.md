@@ -105,26 +105,50 @@ Process 500 images for:
    ```
    The application will be available at `http://localhost:7860`
 
-### Docker Deployment
+### Container Deployment
 
 1. **Build the Container**:
 
-- For only CPU usage:
+DEfault image `breedinginsight/nemaquant` is exclusive for **CPU usage**.
+For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu`
+
+- With Docker
 
    ```bash
    docker pull breedinginsight/nemaquant
    ```
 
-- For GPU usage:
+
+- With Apptainer/Singularity + Slurm from a server:
 
    ```bash
-   docker pull breedinginsight/nemaquant:latest-gpu
+   # 1) On the login node: pull the image once (creates a .sif file)
+   apptainer pull nemaquant_latest.sif docker://breedinginsight/nemaquant:latest
+
+   # 2) Request an interactive compute allocation (adjust for your cluster and analysis)
+   salloc -c 4 --mem=16G --time=02:00:00
+
+   # 3) On the compute node shell that opens, run the app on port 7860
+   export PORT=7860
+   apptainer run --cleanenv --env PORT=$PORT nemaquant_latest.sif
    ```
+
+For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu`
 
 2. **Run the Container**:
 
+- With Docker
+
    ```bash
    docker run -p 7860:7860 -v $(pwd)/results:/app/results breedinginsight/nemaquant
+   ```
+
+- With Apptainer/Singularity + Slurm from our local computer (after running the above commands on server):
+
+   ```bash
+   # Replace user and host with your cluster login node.
+   # If your cluster requires a direct tunnel to the compute node, adapt accordingly.
+   ssh -L 7860:localhost:7860 [userID]@[yourcluster.address]
    ```
 
 ### Hugging Face Spaces Deployment

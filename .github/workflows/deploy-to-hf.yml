@@ -78,12 +78,16 @@ jobs:
     - name: Commit and push
       run: |
         cd space_repo
+        echo "--- Remote URL ---"
+        git remote -v
+        echo "--- Current HEAD ---"
+        git log --oneline -3
         git add .
         if git diff --cached --quiet; then
           echo "No changes to deploy."
         else
           git commit -m "deploy: sync from GitHub ${{ github.sha }}"
-          git push origin main
+          git push -v origin main
         fi
 
     - name: Summary

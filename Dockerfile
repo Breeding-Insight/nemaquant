@@ -1,5 +1,6 @@
 # CPU image - use Dockerfile.gpu for GPU support
 FROM python:3.12.13-slim-trixie
+# Cache bust: 2026-03-19
 
 # run updates before switching over to non-root user
 RUN apt-get update && apt-get install -y --no-install-recommends \
