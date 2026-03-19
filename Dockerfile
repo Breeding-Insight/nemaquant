@@ -12,8 +12,11 @@ RUN useradd -m -u 1000 user
 USER user
 
 # Set home to user's home dir and add local bin to PATH
+# PYTHONPATH is set explicitly so packages are found even when HOME is overridden
+# (e.g. by Apptainer --cleanenv, which resets HOME to the host user's home)
 ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH
+    PATH=/home/user/.local/bin:$PATH \
+    PYTHONPATH=/home/user/.local/lib/python3.12/site-packages
 
 # Set the working directory in the container
 WORKDIR $HOME/app
