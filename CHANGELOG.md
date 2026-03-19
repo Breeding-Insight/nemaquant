@@ -2,46 +2,42 @@ Docker image is versioned based on this file.
 Please, follow the exact format to track versions and updates.
 Add new versions on top of olders.
 
-## [0.0.3] - 2026-03-19
-
-### Fixed — HF Spaces: "No such file or directory" after upload
-- `/uploads` now returns `session_id` in its JSON response; the JS stores it and sends it back as a form field in `/process` and as a query param in `/progress`
-- `/process` and `/progress` use the client-supplied `session_id` as a fallback when the session cookie is absent or points to a different session (common on HF Spaces HTTPS proxy where `SameSite=None` cookies are not always forwarded)
-
-### Fixed — GPU: "Cannot re-initialize CUDA in forked subprocess"
-- Replaced `multiprocessing.Pool` with `concurrent.futures.ThreadPoolExecutor` for GPU inference — Pool uses `fork` by default, which copies the parent's CUDA context into workers causing a crash; threads share the parent context without re-initialising it
-- GPU model (`_gpu_model`) is now loaded once at startup and reused by the thread worker `process_single_image_thread()`, avoiding redundant model loads
-- CPU path unchanged: continues to use `Pool` with per-worker `init_worker()` for true parallelism
-
-### Fixed — Docker image: `Directory /app/uploads does not exist` warning
-- Diagnostic startup check was hardcoded to old `/app/uploads` and `/app/results` paths; now uses `UPLOAD_FOLDER`, `RESULTS_FOLDER`, `ANNOT_FOLDER` constants (`/tmp/nemaquant/…`)
-
 ## [0.0.2] - 2026-03-19
 
-### Fixed — Docker image layer compression (Windows compatibility)
-- Switched CI build output from `compression=zstd,oci-mediatypes=true` back to default gzip — zstd-compressed layers with OCI media types cause `failed to register layer: invalid tar header` on Windows Docker Desktop and older Apptainer versions regardless of Docker Engine version
+### Fixed — Hugging Face Spaces deployment
+
+HF Spaces runs the container behind an HTTPS reverse proxy. Flask's default session cookie settings and the 4 KB cookie size limit caused every route after `/uploads` to silently operate on a different session, making processing and preview fail.
+
+**Root cause:** the HTTPS proxy requires `SameSite=None; Secure` cookies to forward them cross-origin, but even with correct cookie settings the client-side cookie can be dropped when it exceeds ~4 KB (large batches) or when gunicorn assigns a different worker. The real fix was making the session ID travel explicitly in the request body rather than relying solely on the cookie.
+
+**Changes:**
+- `FLASK_SECRET_KEY` read from environment variable — required so the signed cookie is consistent across gunicorn workers and restarts. Falls back to a random key with a warning for local dev
+- `SESSION_COOKIE_SECURE=True`, `SESSION_COOKIE_SAMESITE='None'` set automatically when HF Spaces env vars (`SPACE_HOST`, `SPACE_ID`) are detected
+- All `fetch()` calls in `static/script.js` include `credentials: 'include'`
+- `/uploads` returns `session_id` in its JSON response; JS stores it as `uploadSessionId`
+- Every subsequent request sends `uploadSessionId` back explicitly: as a form field (`/process`), query param (`/progress`), or JSON body field (`/preview`, `/annotate`, `/export_csv`, `/export_images`)
+- All server routes use `client_session_id or session['id']` — client-supplied id is authoritative since it came directly from the `/uploads` response
+- `filename_map` and `uuid_map_to_uuid_imgname` persisted to `/tmp/nemaquant/sessions/<id>/meta.json` at upload time and loaded from disk in all routes as fallback when the cookie data is missing or truncated
+
+### Fixed — GPU: "Cannot re-initialize CUDA in forked subprocess"
+
+- `multiprocessing.Pool` (which uses `fork` by default) copies the parent's CUDA context into child processes, causing a crash when CUDA was already initialized at startup
+- GPU path now uses `concurrent.futures.ThreadPoolExecutor` — threads share the parent's CUDA context without re-initializing it
+- GPU model (`_gpu_model`) loaded once at startup; CPU model loaded per-worker via `init_worker()` as before
 
 ### Fixed — Apptainer / Singularity compatibility
-- `CMD` now uses absolute path `/home/user/app/app.py` instead of relative `app.py` — Apptainer ignores Docker's `WORKDIR` and used the host's cwd, causing "No such file or directory" on launch
-- `PYTHONPATH` baked into image as `/home/user/.local/lib/python3.12/site-packages` — Apptainer `--cleanenv` resets `HOME`, so packages installed under `~/.local` were not found (e.g. `ModuleNotFoundError: No module named 'cv2'`)
-- `YOLO_CONFIG_DIR` moved from `/home/user/app/.yolo_config` to `/tmp/nemaquant/.yolo_config` — the SIF container image is read-only under Apptainer, causing repeated "Read-only file system" errors when ultralytics tried to write its cache
 
-### Fixed — Session data lost for large image batches
-- Flask client-side cookies are limited to ~4 KB; uploading many images caused `filename_map` and `uuid_map_to_uuid_imgname` to overflow and be silently dropped by the browser, breaking Image Preview and annotation after processing
-- Added `_save_session_meta()` / `_load_session_meta()` helpers that persist both maps to `/tmp/nemaquant/sessions/<id>/meta.json`
-- All routes (`/preview`, `/annotate`, `/export_images`, `/export_csv`, `/progress`) now fall back to disk if the cookie is empty or missing
+- `CMD` uses absolute path `/home/user/app/app.py` — Apptainer ignores `WORKDIR` and uses the host's cwd, causing "No such file or directory" at startup
+- `PYTHONPATH=/home/user/.local/lib/python3.12/site-packages` baked into the image — `--cleanenv` resets `HOME` so pip user packages were not found (`ModuleNotFoundError: No module named 'cv2'`)
+- `YOLO_CONFIG_DIR` moved to `/tmp/nemaquant/.yolo_config` — the SIF image is read-only, ultralytics could not write its cache to the image layer
 
-### Fixed — `KeyError: 'filename_map'` in `/annotate` and `/export_csv`
-- `session['filename_map']` replaced with `session.get('filename_map', {})` throughout — avoids crash when session data is missing after container restart or cookie expiry
+### Fixed — Docker image layer format (Windows compatibility)
 
-### Fixed — Session / cookie issues on HF Spaces (HTTPS proxy)
-- Added `FLASK_SECRET_KEY` support: app reads from environment variable so the key is stable across gunicorn workers and restarts; falls back to a random key with a warning
-- `SESSION_COOKIE_SECURE=True`, `SESSION_COOKIE_SAMESITE='None'` applied automatically when running on HF Spaces (detected via `SPACE_HOST`/`SPACE_ID` env vars)
-- All `fetch()` calls in `static/script.js` now include `credentials: 'include'` so session cookies are forwarded on the HTTPS proxy
+- Removed `compression=zstd,oci-mediatypes=true` from the CI build — zstd layers with OCI media types cause `failed to register layer: invalid tar header` on Windows Docker Desktop and Apptainer regardless of engine version. Reverted to default gzip (Docker schema v2)
 
-### Changed — Runtime directories on HF Spaces / Apptainer
-- `uploads/`, `results/`, `annotated/`, `.yolo_config/` moved from the container image layer (`/home/user/app/`) to `/tmp/nemaquant/` — avoids overlay filesystem permission errors on HF Spaces and read-only filesystem errors on Apptainer
-- All directories created at app startup with `mkdir(parents=True, exist_ok=True)` so no manual setup is needed
+### Changed — Runtime data directories
+
+- `uploads/`, `results/`, `annotated/`, `.yolo_config/` moved from `/home/user/app/` (baked into the image layer) to `/tmp/nemaquant/` — avoids overlay filesystem write errors on HF Spaces and read-only filesystem errors on Apptainer. All directories created at app startup
 
 ## [0.0.1] - 2026-03-19
 

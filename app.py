@@ -12,13 +12,11 @@ import pickle
 import shutil
 import logging
 from ultralytics import YOLO
-# from ultralytics.utils import ThreadingLocked
 import numpy as np
 import pandas as pd
 from torch import cuda
 from flask import Flask, Response, render_template, request, jsonify, send_file, session
 from multiprocessing.pool import Pool
-from multiprocessing import set_start_method
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image
@@ -118,9 +116,7 @@ class _FutureWrapper:
     def get(self):
         return self._f.result()
 
-# need a global dict to hold async results objects
-# so you can check the progress of an abr
-# maybe there's a better way around this?
+# Global dict mapping session_id -> async result (Pool AsyncResult or _FutureWrapper)
 async_results = {}
 
 @app.errorhandler(Exception)
@@ -128,9 +124,6 @@ def handle_exception(e):
     print(f"Unhandled exception: {str(e)}")
     print(traceback.format_exc())
     return jsonify({"error": "Server error", "log": str(e)}), 500
-
-# def allowed_file(filename):
-#     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
 @app.route('/')
 def index():
@@ -142,12 +135,10 @@ def upload_files():
     session_id = session['id']
     files = request.files.getlist('files')
     upload_dir = Path(app.config['UPLOAD_FOLDER']) / session_id
-    print(f"DEBUG /uploads: session_id={session_id}, upload_dir={upload_dir}")
     # clear out any existing files for the session
     if upload_dir.exists():
         shutil.rmtree(upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
-    print(f"DEBUG /uploads: dir created, exists={upload_dir.exists()}")
     # generate new unique filenames via uuid, save the mapping dict of old:new to session
     filename_map = {}
     uuid_map_to_uuid_imgname = {}
@@ -243,13 +234,8 @@ def start_processing():
         # id from the /uploads call; the cookie may point to a different worker session.
         client_dir = Path(app.config['UPLOAD_FOLDER']) / client_session_id
         if client_dir.exists() or not (Path(app.config['UPLOAD_FOLDER']) / session_id).exists():
-            print(f"DEBUG /process: using client-supplied session {client_session_id} "
-                  f"(cookie session was {session_id})")
             session_id = client_session_id
             session['id'] = session_id
-    upload_dir_check = Path(app.config['UPLOAD_FOLDER']) / session_id
-    print(f"DEBUG /process: session_id={session_id}, upload_dir={upload_dir_check}, exists={upload_dir_check.exists()}")
-    print(f"DEBUG /process: /tmp/nemaquant/uploads contents={list(Path(app.config['UPLOAD_FOLDER']).iterdir()) if Path(app.config['UPLOAD_FOLDER']).exists() else 'UPLOAD_FOLDER missing'}")
     job_state = {
         "status": "starting",
         "progress": 0,
@@ -534,10 +520,6 @@ def export_csv():
 def ensure_session():
     if 'id' not in session:
         session['id'] = uuid.uuid4().hex
-        print(f"New session started: {session['id']}")
-    else:
-        pass
-        # print(f"Existing session: {session['id']}")
 
 
 def print_startup_info():
