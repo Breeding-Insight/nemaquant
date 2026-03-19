@@ -139,7 +139,7 @@ For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu`
 - With Docker
 
    ```bash
-   docker run -p 7860:7860 -v $(pwd)/results:/app/results breedinginsight/nemaquant
+   docker run -p 7860:7860 breedinginsight/nemaquant
    ```
 
 - With Apptainer/Singularity + Slurm from our local computer (after running the above commands on server):

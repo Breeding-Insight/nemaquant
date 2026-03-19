@@ -501,16 +501,15 @@ def print_startup_info():
         except AttributeError:
             print("User running process: UID/GID not available on this OS")
         
-        for path_str in ["/app/uploads", "/app/results"]:
-            path_obj = Path(path_str)
+        for path_obj in [UPLOAD_FOLDER, RESULTS_FOLDER, ANNOT_FOLDER]:
             if path_obj.exists():
                 stat_info = path_obj.stat()
                 permissions = oct(stat_info.st_mode)[-3:]
                 owner = f"{stat_info.st_uid}:{stat_info.st_gid}"
-                print(f"Permissions for {path_str}: {permissions}")
-                print(f"Owner for {path_str}: {owner}")
+                print(f"Permissions for {path_obj}: {permissions}")
+                print(f"Owner for {path_obj}: {owner}")
             else:
-                print(f"Directory {path_str} does not exist.")
+                print(f"Directory {path_obj} does not exist.")
 
     # some cleanup steps - not sure quite where to put these
     print('Running periodic cleanup of old sessions...')
