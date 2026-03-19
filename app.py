@@ -35,7 +35,14 @@ else:
     print(f"INFO: FLASK_SECRET_KEY is set (length={len(_secret_key)})")
 app.secret_key = _secret_key
 
-# disable werkzeug logging - too noisy
+# HF Spaces serves over HTTPS via a reverse proxy and may embed the app in an iframe.
+# SameSite=None;Secure is required so cookies are sent in cross-site/iframe POST requests.
+# HF sets SPACE_HOST env var; fall back to checking SPACE_ID or SPACE_AUTHOR_NAME.
+_on_https = any(os.environ.get(v) for v in ('SPACE_HOST', 'SPACE_ID', 'SPACE_AUTHOR_NAME'))
+app.config['SESSION_COOKIE_SECURE'] = _on_https
+app.config['SESSION_COOKIE_SAMESITE'] = 'None' if _on_https else 'Lax'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+print(f"INFO: SESSION_COOKIE_SECURE={_on_https}, SAMESITE={'None' if _on_https else 'Lax'}")
 # comment out these lines if you want to see full logs
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
