@@ -1,14 +1,9 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12
-# FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+# CPU image - use Dockerfile.gpu for GPU support
+FROM python:3.12.13-slim-trixie
 
 # run updates before switching over to non-root user
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 \
     libglib2.0-0 \
-    libsm6 \
-    libxrender1 \
-    libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
 # add new user with ID 1000 to avoid permission issues on HF spaces
@@ -17,7 +12,7 @@ USER user
 
 # Set home to user's home dir and add local bin to PATH
 ENV HOME=/home/user \
-    PATH=/user/user/.local/bin:$PATH
+    PATH=/home/user/.local/bin:$PATH
 
 # Set the working directory in the container
 WORKDIR $HOME/app
@@ -25,7 +20,10 @@ WORKDIR $HOME/app
 # Try and run pip command after setting the user with `USER user` to avoid permission issues with Python
 # NOTE - this is from the HF Spaces docs, not sure if necessary
 COPY --chown=user ./requirements.txt .
-RUN pip install --no-cache-dir --upgrade -r requirements.txt
+RUN pip install --no-cache-dir torch==2.7.1 torchvision --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --only-binary :all: -r requirements.txt
+# Force headless opencv after ultralytics (which pulls in full opencv-python as a dependency)
+RUN pip install --no-cache-dir --force-reinstall opencv-python-headless==4.13.0.92
 
 # Copy the current directory contents into the container at $HOME/app setting the owner to the user
 COPY --chown=user . $HOME/app
@@ -40,7 +38,7 @@ COPY --chown=user . $HOME/app
 RUN mkdir -p uploads results annotated .yolo_config
 
 # set the env var for YOLO user config directory
-ENV YOLO_CONFIG_DIR=.yolo_config
+ENV YOLO_CONFIG_DIR=$HOME/app/.yolo_config
 
 # Copy the rest of the application code into the container at /app
 # This includes app.py, nemaquant.py, templates/, static/, etc.

@@ -4,6 +4,7 @@ emoji: 🔬
 colorFrom: indigo
 colorTo: blue
 sdk: docker
+dockerfile: Dockerfile.gpu
 license: apache-2.0
 short_description: "YOLO-based nematode egg detection with real-time processing"
 tags:
