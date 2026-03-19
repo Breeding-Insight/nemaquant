@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentJobId = null;
     let currentZoomLevel = 1;
     let filenameMap = {};
+    let uploadSessionId = ''; // echoed back to /process as cookie-independent fallback
     const MAX_ZOOM = 3;
     const MIN_ZOOM = 0.5;
     let progressInterval = null; // Interval timer for polling
@@ -253,6 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const data = await response.json();
                     logStatus('Files uploaded successfully.');
                     filenameMap = data.filename_map || {};
+                    uploadSessionId = data.session_id || '';
                     
                     // Update results table with filenames and View buttons
                     resultsTableBody.innerHTML = '';
@@ -358,6 +360,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         formData.append('input_mode', mode);
         formData.append('confidence_threshold', confidenceSlider.value);
+        // Send back the session_id from /uploads so the server can recover the
+        // correct upload directory when the session cookie is missing (HF Spaces).
+        if (uploadSessionId) formData.append('session_id', uploadSessionId);
 
         try {
             const response = await fetch('/process', {
@@ -541,7 +546,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         progressInterval = setInterval(async () => {
             try {
-                const response = await fetch('/progress', { credentials: 'include' });
+                const response = await fetch(`/progress?session_id=${encodeURIComponent(uploadSessionId)}`, { credentials: 'include' });
                 if (!response.ok) {
                     let errorText = `Progress check failed: ${response.status}`;
                     try {

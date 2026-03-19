@@ -2,6 +2,20 @@ Docker image is versioned based on this file.
 Please, follow the exact format to track versions and updates.
 Add new versions on top of olders.
 
+## [0.0.3] - 2026-03-19
+
+### Fixed — HF Spaces: "No such file or directory" after upload
+- `/uploads` now returns `session_id` in its JSON response; the JS stores it and sends it back as a form field in `/process` and as a query param in `/progress`
+- `/process` and `/progress` use the client-supplied `session_id` as a fallback when the session cookie is absent or points to a different session (common on HF Spaces HTTPS proxy where `SameSite=None` cookies are not always forwarded)
+
+### Fixed — GPU: "Cannot re-initialize CUDA in forked subprocess"
+- Replaced `multiprocessing.Pool` with `concurrent.futures.ThreadPoolExecutor` for GPU inference — Pool uses `fork` by default, which copies the parent's CUDA context into workers causing a crash; threads share the parent context without re-initialising it
+- GPU model (`_gpu_model`) is now loaded once at startup and reused by the thread worker `process_single_image_thread()`, avoiding redundant model loads
+- CPU path unchanged: continues to use `Pool` with per-worker `init_worker()` for true parallelism
+
+### Fixed — Docker image: `Directory /app/uploads does not exist` warning
+- Diagnostic startup check was hardcoded to old `/app/uploads` and `/app/results` paths; now uses `UPLOAD_FOLDER`, `RESULTS_FOLDER`, `ANNOT_FOLDER` constants (`/tmp/nemaquant/…`)
+
 ## [0.0.2] - 2026-03-19
 
 ### Fixed — Docker image layer compression (Windows compatibility)

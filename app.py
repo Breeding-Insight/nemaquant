@@ -19,6 +19,7 @@ from torch import cuda
 from flask import Flask, Response, render_template, request, jsonify, send_file, session
 from multiprocessing.pool import Pool
 from multiprocessing import set_start_method
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image
 from datetime import datetime
@@ -98,6 +99,25 @@ def _load_session_meta(session_id):
 # Load model once at startup, use CUDA if available
 MODEL_DEVICE = 'cuda' if cuda.is_available() else 'cpu'
 
+# For GPU: load the model globally at startup so threads can reuse it without
+# re-initialising CUDA (forked Pool workers cannot re-init CUDA in the child).
+# For CPU: model is loaded per-worker in init_worker() instead.
+_gpu_model = None
+if MODEL_DEVICE == 'cuda':
+    _gpu_model = YOLO(str(WEIGHTS_FILE))
+    _gpu_model.to('cuda')
+    print(f'GPU model loaded at startup on {MODEL_DEVICE}')
+
+# Wrapper so GPU futures (concurrent.futures.Future) expose the same
+# .ready() interface as multiprocessing AsyncResult.
+class _FutureWrapper:
+    def __init__(self, future):
+        self._f = future
+    def ready(self):
+        return self._f.done()
+    def get(self):
+        return self._f.result()
+
 # need a global dict to hold async results objects
 # so you can check the progress of an abr
 # maybe there's a better way around this?
@@ -144,7 +164,7 @@ def upload_files():
     session['uuid_map_to_uuid_imgname'] = uuid_map_to_uuid_imgname
     # Persist to disk — cookie may be silently dropped if it exceeds ~4KB
     _save_session_meta(session_id, filename_map, uuid_map_to_uuid_imgname)
-    return jsonify({'filename_map': filename_map, 'status': 'uploaded'})
+    return jsonify({'filename_map': filename_map, 'session_id': session_id, 'status': 'uploaded'})
 
 # /preview route for serving original uploaded image
 @app.route('/preview', methods=['POST'])
@@ -184,15 +204,12 @@ def preview_image():
         return jsonify({'error': str(e)}), 500
 
 # initializer for Pool to load model in each process
-# each worker will have its own model instance
+# each worker will have its own model instance (CPU only)
 def init_worker(model_path):
     global model
     model = YOLO(model_path)
-    if MODEL_DEVICE == 'cuda':
-        model.to('cuda')
 
-# not sure if we need this decorator anymore?
-#@ThreadingLocked()
+# CPU pool worker — uses per-worker model loaded by init_worker()
 def process_single_image(img_path, results_dir):
     global model
     uuid_base = img_path.stem
@@ -202,10 +219,33 @@ def process_single_image(img_path, results_dir):
         pickle.dump(results, pf)
     return uuid_base
 
+# GPU thread worker — reuses the global _gpu_model loaded at startup
+def process_single_image_thread(img_path, results_dir):
+    global _gpu_model
+    uuid_base = img_path.stem
+    pickle_path = results_dir / f"{uuid_base}.pkl"
+    results = detect_in_image(_gpu_model, str(img_path))
+    with open(pickle_path, 'wb') as pf:
+        pickle.dump(results, pf)
+    return uuid_base
+
 @app.route('/process', methods=['POST'])
 def start_processing():
     session_id = session['id']
+    # The client echoes back the session_id it received from /uploads.
+    # On HF Spaces the session cookie can be missing on subsequent requests
+    # (HTTPS proxy / SameSite), so we fall back to the client-supplied id
+    # when the cookie-based id doesn't have an upload directory.
+    client_session_id = request.form.get('session_id', '')
     upload_dir_check = Path(app.config['UPLOAD_FOLDER']) / session_id
+    if not upload_dir_check.exists() and client_session_id:
+        fallback_dir = Path(app.config['UPLOAD_FOLDER']) / client_session_id
+        if fallback_dir.exists():
+            print(f"DEBUG /process: cookie session {session_id} has no upload dir; "
+                  f"using client-supplied session {client_session_id}")
+            session_id = client_session_id
+            session['id'] = session_id
+            upload_dir_check = fallback_dir
     print(f"DEBUG /process: session_id={session_id}, upload_dir={upload_dir_check}, exists={upload_dir_check.exists()}")
     print(f"DEBUG /process: /tmp/nemaquant/uploads contents={list(Path(app.config['UPLOAD_FOLDER']).iterdir()) if Path(app.config['UPLOAD_FOLDER']).exists() else 'UPLOAD_FOLDER missing'}")
     job_state = {
@@ -226,21 +266,22 @@ def start_processing():
 
     try:
         if MODEL_DEVICE == 'cuda':
-            n_proc = 1
+            # GPU: run in a single thread so CUDA is never re-initialised in a
+            # forked subprocess (Pool uses fork by default, which breaks CUDA).
+            def _gpu_task():
+                for img_path, res_dir in arg_list:
+                    process_single_image_thread(img_path, res_dir)
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(_gpu_task)
+            executor.shutdown(wait=False)
+            async_results[session_id] = _FutureWrapper(future)
         else:
             n_proc = os.cpu_count()
-            # Initialize job state
-        job_state = {
-            "status": "starting",
-            "progress": 0,
-            "started": True
-        }
-        session['job_state'] = job_state
-        pool = Pool(processes=n_proc,
-                  initializer=init_worker,
-                  initargs=(str(WEIGHTS_FILE),))
-        async_results[session_id] = pool.starmap_async(process_single_image, arg_list)
-        pool.close()
+            pool = Pool(processes=n_proc,
+                      initializer=init_worker,
+                      initargs=(str(WEIGHTS_FILE),))
+            async_results[session_id] = pool.starmap_async(process_single_image, arg_list)
+            pool.close()
 
         # Update job state after process launch
         job_state["status"] = "processing"
@@ -258,8 +299,16 @@ def start_processing():
 @app.route('/progress')
 def get_progress():
         session_id = session['id']
+        # Accept client-supplied session_id as fallback (cookie may be missing on HF Spaces)
+        client_session_id = request.args.get('session_id', '')
+        if client_session_id and session_id not in async_results and client_session_id in async_results:
+            session_id = client_session_id
+            session['id'] = session_id
         try:
             job_state = session.get('job_state')
+            # If session lost job_state but we have an async_result, reconstruct from disk
+            if not job_state and session_id in async_results:
+                job_state = {'status': 'processing', 'progress': 0, 'sessionId': session_id}
             if not job_state:
                 print("/progress: No job_state found in session.")
                 return jsonify({"status": "error", "error": "No job state"}), 404
