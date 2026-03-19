@@ -41,8 +41,10 @@ COPY --chown=user . $HOME/app
 # we should not need to chown, since we are using USER user above
 RUN mkdir -p uploads results annotated .yolo_config
 
-# set the env var for YOLO user config directory
-ENV YOLO_CONFIG_DIR=$HOME/app/.yolo_config
+# Point YOLO config to /tmp so it is writable under Apptainer (read-only SIF)
+# and HF Spaces. /home/user/app/.yolo_config is kept in the image but only used
+# as a fallback when the container filesystem is writable (plain Docker).
+ENV YOLO_CONFIG_DIR=/tmp/nemaquant/.yolo_config
 
 # Copy the rest of the application code into the container at /app
 # This includes app.py, nemaquant.py, templates/, static/, etc.

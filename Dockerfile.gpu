@@ -43,8 +43,10 @@ COPY --chown=user . $HOME/app
 # Create the necessary dirs
 RUN mkdir -p uploads results annotated .yolo_config
 
-# set the env var for YOLO user config directory
-ENV YOLO_CONFIG_DIR=$HOME/app/.yolo_config
+# Point YOLO config to /tmp so it is writable under Apptainer (read-only SIF)
+# and HF Spaces. /home/user/app/.yolo_config is kept in the image but only used
+# as a fallback when the container filesystem is writable (plain Docker).
+ENV YOLO_CONFIG_DIR=/tmp/nemaquant/.yolo_config
 
 EXPOSE 7860
 

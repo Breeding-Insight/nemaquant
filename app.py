@@ -65,6 +65,10 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'tif', 'tiff'}
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
 ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
+# YOLO_CONFIG_DIR points to /tmp/nemaquant/.yolo_config (set in Dockerfile ENV).
+# Create it here so ultralytics can write its cache on read-only container filesystems
+# (e.g. Apptainer SIF images).
+Path(os.environ.get('YOLO_CONFIG_DIR', '/tmp/nemaquant/.yolo_config')).mkdir(parents=True, exist_ok=True)
 print(f"Data root: /tmp/nemaquant | Weights: {WEIGHTS_FILE}")
 
 # Load model once at startup, use CUDA if available
@@ -304,7 +308,7 @@ def annotate_image():
         session_id = session['id']
         uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
-        orig_img_name = session['filename_map'].get(uuid)
+        orig_img_name = session.get('filename_map', {}).get(uuid)
 
         if not img_name:
             return jsonify({'error': 'File not found'}), 404
@@ -392,7 +396,7 @@ def export_csv():
         data = request.json
         session_id = session['id']
         job_state = session.get('job_state')
-        filename_map = session.get('filename_map')
+        filename_map = session.get('filename_map') or {}
         threshold = float(data.get('confidence', 0.5))
         if not job_state:
             return jsonify({'error': 'Job not found'}), 404
@@ -410,7 +414,7 @@ def export_csv():
         rows = []
         for uuid in all_results.keys():
             count = sum(1 for d in all_results[uuid] if d['score'] >= threshold)
-            rows.append({'Filename': filename_map[uuid], 'EggsDetected': count, 'ConfidenceThreshold': threshold})
+            rows.append({'Filename': filename_map.get(uuid, uuid), 'EggsDetected': count, 'ConfidenceThreshold': threshold})
         rows = sorted(rows, key=lambda x: x['Filename'].lower())
         # write the CSV out
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
