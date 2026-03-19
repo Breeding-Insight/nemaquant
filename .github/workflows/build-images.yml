@@ -24,7 +24,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Extract version from CHANGELOG.md
       id: version
@@ -64,6 +64,8 @@ jobs:
         file: ${{ matrix.dockerfile }}
         platforms: linux/amd64
         push: true
+        provenance: false   # avoids 400 errors on Docker Hub caused by BuildKit attestation manifests
+        sbom: false
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha,scope=${{ matrix.variant }}

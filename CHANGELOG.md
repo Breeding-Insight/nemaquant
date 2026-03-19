@@ -17,3 +17,4 @@ Add new versions on top of olders.
 - Updated CI/CD GitHub Actions workflows:
     - `build-images.yml`: builds and pushes both CPU and GPU images to Docker Hub on push to `main`, tagged with version from `CHANGELOG.md` and `latest`
     - `deploy-to-hf.yml`: syncs app files and model weights to Hugging Face Space on push to `main`, using Git LFS for weight files
+- Added `update-dockerhub-meta.yml` to make a pretty Dockerhub description based on the `README.md`
