@@ -25,7 +25,13 @@ from werkzeug.utils import secure_filename
 from yolo_utils import detect_in_image
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', str(uuid.uuid4()))  # For session security
+_secret_key = os.environ.get('FLASK_SECRET_KEY')
+if not _secret_key:
+    # Fallback for local dev only — sessions won't persist across restarts.
+    # On HF Spaces, set FLASK_SECRET_KEY as a Space secret to avoid session loss between workers.
+    _secret_key = str(uuid.uuid4())
+    print("WARNING: FLASK_SECRET_KEY not set — using random key. Sessions will break across workers/restarts.")
+app.secret_key = _secret_key
 
 # disable werkzeug logging - too noisy
 # comment out these lines if you want to see full logs

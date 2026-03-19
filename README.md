@@ -118,7 +118,6 @@ For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu`
    docker pull breedinginsight/nemaquant
    ```
 
-
 - With Apptainer/Singularity + Slurm from a server:
 
    ```bash
