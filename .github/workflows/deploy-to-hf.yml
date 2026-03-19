@@ -5,14 +5,15 @@ on:
     branches: [ main, docker_beauty ]  # TODO: remove docker_beauty before merging
   workflow_dispatch:
 
-env:
-  HF_SPACE_REPO: breedinginsight/nemaquant  # update if the Space name changes
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
+    env:
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      HF_SPACE_REPO: ${{ secrets.HUGGINGFACE_SPACE_REPO }}
 
     steps:
     - name: Checkout repository
@@ -22,12 +23,12 @@ jobs:
 
     - name: Validate secrets
       run: |
-        if [ -z "${{ secrets.HUGGINGFACE_TOKEN }}" ]; then
+        if [ -z "$HF_TOKEN" ]; then
           echo "ERROR: HUGGINGFACE_TOKEN secret is not set." >&2
           exit 1
         fi
-        if [ -z "${{ secrets.HUGGINGFACE_USERNAME }}" ]; then
-          echo "ERROR: HUGGINGFACE_USERNAME secret is not set." >&2
+        if [ -z "$HF_SPACE_REPO" ]; then
+          echo "ERROR: HUGGINGFACE_SPACE_REPO secret is not set." >&2
           exit 1
         fi
 
@@ -36,12 +37,13 @@ jobs:
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         git config --global credential.helper store
-        echo "https://${{ secrets.HUGGINGFACE_USERNAME }}:${{ secrets.HUGGINGFACE_TOKEN }}@huggingface.co" > ~/.git-credentials
+        # HF accepts any username when authenticating via token
+        printf 'https://user:%s@huggingface.co\n' "$HF_TOKEN" > ~/.git-credentials
         git lfs install
 
     - name: Clone existing HF Space
       run: |
-        git clone https://${{ secrets.HUGGINGFACE_USERNAME }}:${{ secrets.HUGGINGFACE_TOKEN }}@huggingface.co/spaces/${{ env.HF_SPACE_REPO }} space_repo
+        git clone "https://huggingface.co/spaces/$HF_SPACE_REPO" space_repo
         cd space_repo
         git lfs install
 
@@ -77,7 +79,6 @@ jobs:
       run: |
         cd space_repo
         git add .
-        # Only commit if there are actual changes
         if git diff --cached --quiet; then
           echo "No changes to deploy."
         else
@@ -88,11 +89,14 @@ jobs:
     - name: Summary
       run: |
         echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- **Space**: [spaces/${{ env.HF_SPACE_REPO }}](https://huggingface.co/spaces/${{ env.HF_SPACE_REPO }})" >> $GITHUB_STEP_SUMMARY
+        echo "- **Space**: [spaces/$HF_SPACE_REPO](https://huggingface.co/spaces/$HF_SPACE_REPO)" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Model files deployed:" >> $GITHUB_STEP_SUMMARY
         cd space_repo
+        for file in *.pt *.onnx; do
+          [ -f "$file" ] && echo "- \`$file\` ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
+        done
         for file in *.pt *.onnx; do
           [ -f "$file" ] && echo "- \`$file\` ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
         done

@@ -2,7 +2,7 @@ name: Update Docker Hub Metadata
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, docker_beauty ]
     paths:
       - README.md          # re-run when README changes
       - .github/workflows/update-dockerhub-meta.yml
