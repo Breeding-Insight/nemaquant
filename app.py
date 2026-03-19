@@ -87,10 +87,12 @@ def upload_files():
     session_id = session['id']
     files = request.files.getlist('files')
     upload_dir = Path(app.config['UPLOAD_FOLDER']) / session_id
+    print(f"DEBUG /uploads: session_id={session_id}, upload_dir={upload_dir}")
     # clear out any existing files for the session
     if upload_dir.exists():
         shutil.rmtree(upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
+    print(f"DEBUG /uploads: dir created, exists={upload_dir.exists()}")
     # generate new unique filenames via uuid, save the mapping dict of old:new to session
     filename_map = {}
     uuid_map_to_uuid_imgname = {}
@@ -165,6 +167,9 @@ def process_single_image(img_path, results_dir):
 @app.route('/process', methods=['POST'])
 def start_processing():
     session_id = session['id']
+    upload_dir_check = Path(app.config['UPLOAD_FOLDER']) / session_id
+    print(f"DEBUG /process: session_id={session_id}, upload_dir={upload_dir_check}, exists={upload_dir_check.exists()}")
+    print(f"DEBUG /process: /tmp/nemaquant/uploads contents={list(Path(app.config['UPLOAD_FOLDER']).iterdir()) if Path(app.config['UPLOAD_FOLDER']).exists() else 'UPLOAD_FOLDER missing'}")
     job_state = {
         "status": "starting",
         "progress": 0,
