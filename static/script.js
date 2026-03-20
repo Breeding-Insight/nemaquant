@@ -162,7 +162,6 @@ document.addEventListener('DOMContentLoaded', () => {
         filteredValidFiles = validFiles;
 
         const invalidFiles = Array.from(files).filter(file => !allowedTypes.includes(file.type));
-
         // Only print invalid file warnings if not in Keyence mode
         if (invalidFiles.length > 0 && inputMode.value !== 'keyence') {
             logStatus(`Warning: Skipped ${invalidFiles.length} invalid files. Only PNG, JPG, and TIFF are supported.`);
@@ -189,7 +188,6 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
         fileList.appendChild(summaryDiv);
 
-        fileInput.files = files;
         updateUploadState(validFiles.length);
     }
 
@@ -228,9 +226,10 @@ document.addEventListener('DOMContentLoaded', () => {
         dropZone.classList.remove('drag-over');
     }
 
-    dropZone.addEventListener('drop', (e) => {
+    dropZone.addEventListener('drop', async (e) => {
         const dt = e.dataTransfer;
         handleFiles(dt.files);
+        await uploadFilesToServer();
     });
 
     // Click to upload
@@ -238,49 +237,50 @@ document.addEventListener('DOMContentLoaded', () => {
         fileInput.click();
     });
 
+    async function uploadFilesToServer() {
+        if (!filteredValidFiles || filteredValidFiles.length === 0) return;
+        const formData = new FormData();
+        filteredValidFiles.forEach(f => formData.append('files', f));
+        try {
+            const response = await fetch('/uploads', {
+                method: 'POST',
+                credentials: 'include',
+                body: formData
+            });
+            if (response.ok) {
+                const data = await response.json();
+                logStatus('Files uploaded successfully.');
+                filenameMap = data.filename_map || {};
+                uploadSessionId = data.session_id || '';
+
+                // Update results table with filenames and View buttons
+                resultsTableBody.innerHTML = '';
+                Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
+                    const row = resultsTableBody.insertRow();
+                    row.dataset.originalIndex = idx;
+                    row.innerHTML = `
+                        <td>${originalFilename}</td>
+                        <td style="color:#bbb;">NA</td>
+                        <td><button class="view-button" data-index="${idx}">View</button></td>
+                    `;
+                });
+                resultsTableBody.querySelectorAll('.view-button').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const idx = parseInt(btn.dataset.index, 10);
+                        displayImage(idx);
+                    });
+                });
+            } else {
+                logStatus('File upload failed.');
+            }
+        } catch (err) {
+            logStatus('Error uploading files: ' + err);
+        }
+    }
+
     fileInput.addEventListener('change', async () => {
         handleFiles(fileInput.files);
-        if (filteredValidFiles && filteredValidFiles.length > 0) {
-            // Prepare FormData for upload
-            const formData = new FormData();
-            filteredValidFiles.forEach(f => formData.append('files', f));
-            try {
-                const response = await fetch('/uploads', {
-                    method: 'POST',
-                    credentials: 'include',
-                    body: formData
-                });
-                if (response.ok) {
-                    const data = await response.json();
-                    logStatus('Files uploaded successfully.');
-                    filenameMap = data.filename_map || {};
-                    uploadSessionId = data.session_id || '';
-                    
-                    // Update results table with filenames and View buttons
-                    resultsTableBody.innerHTML = '';
-                    Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
-                        const row = resultsTableBody.insertRow();
-                        row.dataset.originalIndex = idx;
-                        row.innerHTML = `
-                            <td>${originalFilename}</td>
-                            <td style="color:#bbb;">NA</td>
-                            <td><button class="view-button" data-index="${idx}">View</button></td>
-                        `;
-                    });
-                    // Add click event for View buttons
-                    resultsTableBody.querySelectorAll('.view-button').forEach(btn => {
-                        btn.addEventListener('click', (e) => {
-                            const idx = parseInt(btn.dataset.index, 10);
-                            displayImage(idx);
-                        });
-                    });
-                } else {
-                    logStatus('File upload failed.');
-                }
-            } catch (err) {
-                logStatus('Error uploading files: ' + err);
-            }
-        }
+        await uploadFilesToServer();
     });
 
     // Input mode change

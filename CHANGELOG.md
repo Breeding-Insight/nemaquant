@@ -35,6 +35,11 @@ HF Spaces runs the container behind an HTTPS reverse proxy. Flask's default sess
 
 - Removed `compression=zstd,oci-mediatypes=true` from the CI build — zstd layers with OCI media types cause `failed to register layer: invalid tar header` on Windows Docker Desktop and Apptainer regardless of engine version. Reverted to default gzip (Docker schema v2)
 
+### Fixed — Drag-and-drop file upload not working
+
+- Drag-and-drop called `handleFiles()` (which set the valid file list) but never called `/uploads`, so no files were on the server when "Start Processing" was clicked. The `fileInput.files = files` assignment at the end of `handleFiles()` was a silent no-op — `fileInput.files` is read-only
+- Extracted the `/uploads` fetch into a shared `uploadFilesToServer()` function; both the file-picker `change` event and the `drop` event now call it
+
 ### Changed — Runtime data directories
 
 - `uploads/`, `results/`, `annotated/`, `.yolo_config/` moved from `/home/user/app/` (baked into the image layer) to `/tmp/nemaquant/` — avoids overlay filesystem write errors on HF Spaces and read-only filesystem errors on Apptainer. All directories created at app startup
