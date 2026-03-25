@@ -2,7 +2,7 @@ name: Deploy to Hugging Face Spaces
 
 on:
   push:
-    branches: [ main, docker_beauty ]  # TODO: remove docker_beauty before merging
+    branches: [ main, hf_gpu_testing ]  # TODO: remove docker_beauty before merging
   workflow_dispatch:
 
 jobs:
@@ -63,7 +63,7 @@ jobs:
         # Sync application files
         cp ../app.py .
         cp ../requirements.txt .
-        cp ../Dockerfile .
+        cp ../Dockerfile.gpu ./Dockerfile
         cp ../yolo_utils.py .
         cp ../README.md .
         cp -r ../templates .
