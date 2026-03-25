@@ -1,0 +1,58 @@
+name: Update Docker Hub Metadata
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - README.md          # re-run when README changes
+      - .github/workflows/update-dockerhub-meta.yml
+  workflow_dispatch:
+
+env:
+  DOCKERHUB_REPO: breedinginsight/nemaquant
+
+jobs:
+  update-meta:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Update Docker Hub description
+      uses: peter-evans/dockerhub-description@v4
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+        repository: ${{ env.DOCKERHUB_REPO }}
+        short-description: "YOLO-based nematode egg detection with real-time processing"
+        readme-filepath: ./README.md   # used as the full (long) description on Docker Hub
+
+    - name: Set Docker Hub category via API
+      run: |
+        # Authenticate and get JWT token
+        TOKEN=$(curl -s -X POST "https://hub.docker.com/v2/users/login" \
+          -H "Content-Type: application/json" \
+          -d "{\"username\": \"${{ secrets.DOCKERHUB_USERNAME }}\", \"password\": \"${{ secrets.DOCKERHUB_PASSWORD }}\"}" \
+          | jq -r '.token')
+
+        if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+          echo "ERROR: Failed to authenticate with Docker Hub" >&2
+          exit 1
+        fi
+
+        # Set repository category (Machine Learning)
+        # Full list: https://hub.docker.com/search?categories=
+        curl -s -X PATCH "https://hub.docker.com/v2/repositories/${{ env.DOCKERHUB_REPO }}/" \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"categories": [{"name": "Machine Learning"}]}' \
+          | jq .
+
+    - name: Summary
+      run: |
+        echo "## Docker Hub Metadata Updated" >> $GITHUB_STEP_SUMMARY
+        echo "- **Repository**: [hub.docker.com/r/${{ env.DOCKERHUB_REPO }}](https://hub.docker.com/r/${{ env.DOCKERHUB_REPO }})" >> $GITHUB_STEP_SUMMARY
+        echo "- **Short description**: YOLO-based nematode egg detection with real-time processing" >> $GITHUB_STEP_SUMMARY
+        echo "- **Full description**: synced from \`README.md\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Category**: Machine Learning" >> $GITHUB_STEP_SUMMARY

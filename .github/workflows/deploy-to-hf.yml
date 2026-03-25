@@ -2,7 +2,7 @@ name: Deploy to Hugging Face Spaces
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, docker_beauty ]  # TODO: remove docker_beauty before merging
   workflow_dispatch:
 
 jobs:
@@ -11,94 +11,96 @@ jobs:
     permissions:
       contents: read
 
+    env:
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      HF_SPACE_REPO: ${{ secrets.HUGGINGFACE_SPACE_REPO }}
+
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         lfs: true
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
-
-    - name: Install dependencies
+    - name: Validate secrets
       run: |
-        pip install huggingface_hub
-        # Install Git LFS
-        sudo apt-get update
-        sudo apt-get install -y git-lfs
-        git lfs install
-
-    - name: Push to Hugging Face Space
-      env:
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-      run: |
-        # Check if HUGGINGFACE_SPACE_REPO is set
-        if [ -z "${{ secrets.HUGGINGFACE_SPACE_REPO }}" ]; then
-          echo "HUGGINGFACE_SPACE_REPO secret not set. Please set it to your space repository name (e.g., 'username/nemaquant')"
+        if [ -z "$HF_TOKEN" ]; then
+          echo "ERROR: HUGGINGFACE_TOKEN secret is not set." >&2
           exit 1
         fi
-        
-        # Configure git credentials for Hugging Face
+        if [ -z "$HF_SPACE_REPO" ]; then
+          echo "ERROR: HUGGINGFACE_SPACE_REPO secret is not set." >&2
+          exit 1
+        fi
+
+    - name: Configure git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
         git config --global credential.helper store
-        echo "https://user:${HF_TOKEN}@huggingface.co" > ~/.git-credentials
-        
-        # Create a temporary directory for the space
-        mkdir -p space_repo
-        cd space_repo
-        
-        # Initialize git repository with LFS
-        git init -b main
+        # HF accepts any username when authenticating via token
+        printf 'https://user:%s@huggingface.co\n' "$HF_TOKEN" > ~/.git-credentials
         git lfs install
-        git remote add origin https://huggingface.co/spaces/${{ secrets.HUGGINGFACE_SPACE_REPO }}
-        
-        # Create .gitattributes for LFS BEFORE copying files
-        echo "*.pt filter=lfs diff=lfs merge=lfs -text" > .gitattributes
-        echo "*.pth filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
-        echo "*.bin filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
-        echo "*.h5 filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
-        echo "*.onnx filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
-        
-        # Copy necessary files
-        cp ../README.md .
+
+    - name: Clone existing HF Space
+      run: |
+        git clone "https://huggingface.co/spaces/$HF_SPACE_REPO" space_repo
+        cd space_repo
+        git lfs install
+
+    - name: Sync files into Space
+      run: |
+        cd space_repo
+
+        # Ensure LFS tracks model file types
+        cat > .gitattributes <<'EOF'
+        *.pt filter=lfs diff=lfs merge=lfs -text
+        *.pth filter=lfs diff=lfs merge=lfs -text
+        *.bin filter=lfs diff=lfs merge=lfs -text
+        *.h5 filter=lfs diff=lfs merge=lfs -text
+        *.onnx filter=lfs diff=lfs merge=lfs -text
+        EOF
+
+        # Sync application files
         cp ../app.py .
         cp ../requirements.txt .
         cp ../Dockerfile .
         cp ../yolo_utils.py .
+        cp ../README.md .
         cp -r ../templates .
         cp -r ../static .
-        
-        # Copy all .pt and .onnx files from the root directory
-        echo "Checking for model files..."
-        find .. -maxdepth 1 -type f -name "*.pt" -exec cp {} . \;
-        find .. -maxdepth 1 -type f -name "*.onnx" -exec cp {} . \;
-        
-        # List what we're about to commit
+
+        # Sync model weight files
+        find .. -maxdepth 1 -type f \( -name "*.pt" -o -name "*.onnx" \) -exec cp {} . \;
+
         echo "Files to be committed:"
         ls -lh
-        
-        # Add and commit
-        git add .gitattributes
+
+    - name: Commit and push
+      run: |
+        cd space_repo
+        echo "--- Remote URL ---"
+        git remote -v
+        echo "--- Current HEAD ---"
+        git log --oneline -3
         git add .
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        git commit -m "Update NemaQuant app from GitHub Actions - ${{ github.sha }}"
-        
-        # Push to Hugging Face Space (force push to main branch)
-        git push --force origin main
+        if git diff --cached --quiet; then
+          echo "No changes to deploy."
+        else
+          git commit -m "deploy: sync from GitHub ${{ github.sha }}"
+          git push -v origin main
+        fi
 
     - name: Summary
       run: |
         echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- **Hugging Face Space**: \`https://huggingface.co/spaces/${{ secrets.HUGGINGFACE_SPACE_REPO }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Space**: [spaces/$HF_SPACE_REPO](https://huggingface.co/spaces/$HF_SPACE_REPO)" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "- **Status**: Successfully deployed to HF Spaces" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### Model Files:" >> $GITHUB_STEP_SUMMARY
+        echo "### Model files deployed:" >> $GITHUB_STEP_SUMMARY
         cd space_repo
         for file in *.pt *.onnx; do
-          if [ -f "$file" ]; then
-            echo "- ✅ $file ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
-          fi
+          [ -f "$file" ] && echo "- \`$file\` ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
+        done
+        for file in *.pt *.onnx; do
+          [ -f "$file" ] && echo "- \`$file\` ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
         done

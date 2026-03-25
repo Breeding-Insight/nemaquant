@@ -4,6 +4,7 @@ emoji: 🔬
 colorFrom: indigo
 colorTo: blue
 sdk: docker
+dockerfile: Dockerfile.gpu
 license: apache-2.0
 short_description: "YOLO-based nematode egg detection with real-time processing"
 tags:
@@ -104,16 +105,49 @@ Process 500 images for:
    ```
    The application will be available at `http://localhost:7860`
 
-### Docker Deployment
+### Container Deployment
 
 1. **Build the Container**:
+
+DEfault image `breedinginsight/nemaquant` is exclusive for **CPU usage**.
+For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu`
+
+- With Docker
+
    ```bash
-   docker build -t nemaquant-flask .
+   docker pull breedinginsight/nemaquant
    ```
 
-2. **Run the Container**:
+- With Apptainer/Singularity + Slurm from a server:
+
    ```bash
-   docker run -p 7860:7860 -v $(pwd)/results:/app/results nemaquant-flask
+   # 1) On the login node: pull the image once (creates a .sif file)
+   apptainer pull nemaquant_latest.sif docker://breedinginsight/nemaquant:latest
+
+   # 2) Request an interactive compute allocation (adjust for your cluster and analysis)
+   salloc -c 4 --mem=16G --time=02:00:00
+
+   # 3) On the compute node shell that opens, run the app on port 7860
+   export PORT=7860
+   apptainer run --cleanenv --env PORT=$PORT nemaquant_latest.sif
+   ```
+
+For **GPU usage** replace the image by: `breedinginsight/nemaquant:latest-gpu` and the option `--nv` for apptainer/singularity run.
+
+2. **Run the Container**:
+
+- With Docker
+
+   ```bash
+   docker run -p 7860:7860 breedinginsight/nemaquant
+   ```
+
+- With Apptainer/Singularity + Slurm from our local computer (after running the above commands on server):
+
+   ```bash
+   # Replace user and host with your cluster login node.
+   # If your cluster requires a direct tunnel to the compute node, adapt accordingly.
+   ssh -L 7860:localhost:7860 [userID]@[yourcluster.address]
    ```
 
 ### Hugging Face Spaces Deployment
@@ -190,7 +224,3 @@ Process 500 images for:
 - Time of day (free tier performance varies with overall platform usage)
 
 For most users, the free tier is sufficient for small to medium batches (< 200 images), while the CPU upgrade offers a good balance of cost and performance for larger datasets. GPU options are recommended only for time-sensitive processing of large batches or when processing thousands of images.
-
-## License
-
-[Specify your license here]

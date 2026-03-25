@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentJobId = null;
     let currentZoomLevel = 1;
     let filenameMap = {};
+    let uploadSessionId = ''; // echoed back to /process as cookie-independent fallback
     const MAX_ZOOM = 3;
     const MIN_ZOOM = 0.5;
     let progressInterval = null; // Interval timer for polling
@@ -161,7 +162,6 @@ document.addEventListener('DOMContentLoaded', () => {
         filteredValidFiles = validFiles;
 
         const invalidFiles = Array.from(files).filter(file => !allowedTypes.includes(file.type));
-
         // Only print invalid file warnings if not in Keyence mode
         if (invalidFiles.length > 0 && inputMode.value !== 'keyence') {
             logStatus(`Warning: Skipped ${invalidFiles.length} invalid files. Only PNG, JPG, and TIFF are supported.`);
@@ -188,7 +188,6 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
         fileList.appendChild(summaryDiv);
 
-        fileInput.files = files;
         updateUploadState(validFiles.length);
     }
 
@@ -227,9 +226,10 @@ document.addEventListener('DOMContentLoaded', () => {
         dropZone.classList.remove('drag-over');
     }
 
-    dropZone.addEventListener('drop', (e) => {
+    dropZone.addEventListener('drop', async (e) => {
         const dt = e.dataTransfer;
         handleFiles(dt.files);
+        await uploadFilesToServer();
     });
 
     // Click to upload
@@ -237,47 +237,50 @@ document.addEventListener('DOMContentLoaded', () => {
         fileInput.click();
     });
 
+    async function uploadFilesToServer() {
+        if (!filteredValidFiles || filteredValidFiles.length === 0) return;
+        const formData = new FormData();
+        filteredValidFiles.forEach(f => formData.append('files', f));
+        try {
+            const response = await fetch('/uploads', {
+                method: 'POST',
+                credentials: 'include',
+                body: formData
+            });
+            if (response.ok) {
+                const data = await response.json();
+                logStatus('Files uploaded successfully.');
+                filenameMap = data.filename_map || {};
+                uploadSessionId = data.session_id || '';
+
+                // Update results table with filenames and View buttons
+                resultsTableBody.innerHTML = '';
+                Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
+                    const row = resultsTableBody.insertRow();
+                    row.dataset.originalIndex = idx;
+                    row.innerHTML = `
+                        <td>${originalFilename}</td>
+                        <td style="color:#bbb;">NA</td>
+                        <td><button class="view-button" data-index="${idx}">View</button></td>
+                    `;
+                });
+                resultsTableBody.querySelectorAll('.view-button').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const idx = parseInt(btn.dataset.index, 10);
+                        displayImage(idx);
+                    });
+                });
+            } else {
+                logStatus('File upload failed.');
+            }
+        } catch (err) {
+            logStatus('Error uploading files: ' + err);
+        }
+    }
+
     fileInput.addEventListener('change', async () => {
         handleFiles(fileInput.files);
-        if (filteredValidFiles && filteredValidFiles.length > 0) {
-            // Prepare FormData for upload
-            const formData = new FormData();
-            filteredValidFiles.forEach(f => formData.append('files', f));
-            try {
-                const response = await fetch('/uploads', {
-                    method: 'POST',
-                    body: formData
-                });
-                if (response.ok) {
-                    const data = await response.json();
-                    logStatus('Files uploaded successfully.');
-                    filenameMap = data.filename_map || {};
-                    
-                    // Update results table with filenames and View buttons
-                    resultsTableBody.innerHTML = '';
-                    Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
-                        const row = resultsTableBody.insertRow();
-                        row.dataset.originalIndex = idx;
-                        row.innerHTML = `
-                            <td>${originalFilename}</td>
-                            <td style="color:#bbb;">NA</td>
-                            <td><button class="view-button" data-index="${idx}">View</button></td>
-                        `;
-                    });
-                    // Add click event for View buttons
-                    resultsTableBody.querySelectorAll('.view-button').forEach(btn => {
-                        btn.addEventListener('click', (e) => {
-                            const idx = parseInt(btn.dataset.index, 10);
-                            displayImage(idx);
-                        });
-                    });
-                } else {
-                    logStatus('File upload failed.');
-                }
-            } catch (err) {
-                logStatus('Error uploading files: ' + err);
-            }
-        }
+        await uploadFilesToServer();
     });
 
     // Input mode change
@@ -357,10 +360,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         formData.append('input_mode', mode);
         formData.append('confidence_threshold', confidenceSlider.value);
+        // Send back the session_id from /uploads so the server can recover the
+        // correct upload directory when the session cookie is missing (HF Spaces).
+        if (uploadSessionId) formData.append('session_id', uploadSessionId);
 
         try {
             const response = await fetch('/process', {
                 method: 'POST',
+                credentials: 'include',
                 body: formData,
             });
             if (!response.ok) {
@@ -482,14 +489,16 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isCompleted) {
                 response = await fetch('/annotate', {
                     method: 'POST',
+                    credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uuid: uuid, confidence })
+                    body: JSON.stringify({ uuid: uuid, confidence, session_id: uploadSessionId })
                 });
             } else {
                 response = await fetch('/preview', {
                     method: 'POST',
+                    credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uuid: uuid })
+                    body: JSON.stringify({ uuid: uuid, session_id: uploadSessionId })
                 });
             }
             if (response.ok) {
@@ -537,7 +546,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         progressInterval = setInterval(async () => {
             try {
-                const response = await fetch(`/progress`);
+                const response = await fetch(`/progress?session_id=${encodeURIComponent(uploadSessionId)}`, { credentials: 'include' });
                 if (!response.ok) {
                     let errorText = `Progress check failed: ${response.status}`;
                     try {
@@ -1055,8 +1064,9 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const resp = await fetch('/export_csv', {
                 method: 'POST',
+                credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ confidence: threshold })
+                body: JSON.stringify({ confidence: threshold, session_id: uploadSessionId })
             });
             if (!resp.ok) throw new Error('Failed to export CSV');
             const blob = await resp.blob();
@@ -1092,8 +1102,9 @@ document.addEventListener('DOMContentLoaded', () => {
             logStatus('Preparing annotated images for download...');
             const resp = await fetch('/export_images', {
                 method: 'POST',
+                credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ confidence: threshold })
+                body: JSON.stringify({ confidence: threshold, session_id: uploadSessionId })
             });
             if (!resp.ok) throw new Error('Failed to export images');
             const blob = await resp.blob();
