@@ -37,7 +37,7 @@ COPY --chown=user . $HOME/app
 
 # Create the necessary dirs
 # we should not need to chown, since we are using USER user above
-RUN mkdir -p uploads results annotated .yolo_config
+RUN mkdir -p .yolo_config
 
 # set the env var for YOLO user config directory
 ENV YOLO_CONFIG_DIR=.yolo_config
@@ -55,7 +55,7 @@ EXPOSE 7860
 # ENV NAME=World
 
 # Run app.py when the container launches
-# Use gunicorn for production deployment if preferred over Flask's development server
+# You could use gunicorn for production deployment if preferred over Flask's development server
 # CMD ["gunicorn", "--bind", "0.0.0.0:7860", "app:app"]
 # For simplicity during development and typical HF Spaces use:
 CMD ["python", "app.py"]

@@ -54,7 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Store all detections for frontend filtering ---
     let allDetections = [];
-    let allImageData = {};
+    let isProcessing = false;
 
     // Input mode change
     inputMode.addEventListener('change', () => {
@@ -192,14 +192,6 @@ document.addEventListener('DOMContentLoaded', () => {
         updateUploadState(validFiles.length);
     }
 
-    function formatFileSize(bytes) {
-        if (bytes === 0) return '0 B';
-        const k = 1024;
-        const sizes = ['B', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-    }
-
     // Drag and Drop
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         dropZone.addEventListener(eventName, preventDefaults, false);
@@ -227,9 +219,10 @@ document.addEventListener('DOMContentLoaded', () => {
         dropZone.classList.remove('drag-over');
     }
 
-    dropZone.addEventListener('drop', (e) => {
+    dropZone.addEventListener('drop', async (e) => {
         const dt = e.dataTransfer;
         handleFiles(dt.files);
+        await uploadFilesToServer();
     });
 
     // Click to upload
@@ -239,54 +232,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fileInput.addEventListener('change', async () => {
         handleFiles(fileInput.files);
-        if (filteredValidFiles && filteredValidFiles.length > 0) {
-            // Prepare FormData for upload
-            const formData = new FormData();
-            filteredValidFiles.forEach(f => formData.append('files', f));
-            try {
-                const response = await fetch('/uploads', {
-                    method: 'POST',
-                    body: formData
-                });
-                if (response.ok) {
-                    const data = await response.json();
-                    logStatus('Files uploaded successfully.');
-                    filenameMap = data.filename_map || {};
-                    
-                    // Update results table with filenames and View buttons
-                    resultsTableBody.innerHTML = '';
-                    Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
-                        const row = resultsTableBody.insertRow();
-                        row.dataset.originalIndex = idx;
-                        row.innerHTML = `
-                            <td>${originalFilename}</td>
-                            <td style="color:#bbb;">NA</td>
-                            <td><button class="view-button" data-index="${idx}">View</button></td>
-                        `;
-                    });
-                    // Add click event for View buttons
-                    resultsTableBody.querySelectorAll('.view-button').forEach(btn => {
-                        btn.addEventListener('click', (e) => {
-                            const idx = parseInt(btn.dataset.index, 10);
-                            displayImage(idx);
-                        });
-                    });
-                } else {
-                    logStatus('File upload failed.');
-                }
-            } catch (err) {
-                logStatus('Error uploading files: ' + err);
-            }
-        }
-    });
-
-    // Input mode change
-    inputMode.addEventListener('change', () => {
-        updateUploadState();
+        await uploadFilesToServer();
     });
 
     function updateUploadState(validFileCount) {
-        // Use filteredValidFiles for enabling/disabling the button
         if (!filteredValidFiles || filteredValidFiles.length === 0) {
             if (inputMode.value === 'folder') {
                 uploadText.textContent = 'Click to select a folder containing images';
@@ -298,26 +247,67 @@ document.addEventListener('DOMContentLoaded', () => {
             startProcessingBtn.disabled = true;
         } else {
             uploadText.textContent = `${validFileCount} image${validFileCount === 1 ? '' : 's'} selected`;
-            startProcessingBtn.disabled = validFileCount === 0;
-            // Populate results table with uuid/filename pairs from filenameMap after upload
-            resultsTableBody.innerHTML = '';
-            Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
-                const row = resultsTableBody.insertRow();
-                row.dataset.originalIndex = idx;
-                row.innerHTML = `
-                    <td>${originalFilename}</td>
-                    <td style="color:#bbb;">NA</td>
-                    <td><button class="view-button" data-uuid="${uuid}" data-index="${idx}">View</button></td>
-                `;
-            });
-            // Add click event for View buttons
-            resultsTableBody.querySelectorAll('.view-button').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    const uuid = btn.getAttribute('data-uuid');
-                    displayImage(uuid);
-                });
-            });
+            startProcessingBtn.disabled = false;
         }
+    }
+
+    async function uploadFilesToServer() {
+        if (!filteredValidFiles || filteredValidFiles.length === 0) return;
+
+        // Clear previous detection results and state
+        allDetections = [];
+        currentResults = [];
+        currentImageIndex = -1;
+
+        // Hide confidence plot since previous results are cleared
+        const plotDiv = document.getElementById('confidence-plot');
+        if (plotDiv) plotDiv.style.display = 'none';
+
+        // Disable export buttons until new processing completes
+        exportCsvBtn.disabled = true;
+        exportImagesBtn.disabled = true;
+
+        const formData = new FormData();
+        filteredValidFiles.forEach(f => formData.append('files', f));
+        try {
+            const response = await fetch('/uploads', {
+                method: 'POST',
+                body: formData
+            });
+            if (response.ok) {
+                const data = await response.json();
+                logStatus('Files uploaded successfully.');
+                filenameMap = data.filename_map || {};
+                populateResultsTable();
+                // Show first image in preview pane
+                if (Object.keys(filenameMap).length > 0) {
+                    displayImage(0);
+                }
+            } else {
+                logStatus('File upload failed.');
+            }
+        } catch (err) {
+            logStatus('Error uploading files: ' + err);
+        }
+    }
+
+    function populateResultsTable() {
+        resultsTableBody.innerHTML = '';
+        Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
+            const row = resultsTableBody.insertRow();
+            row.dataset.originalIndex = idx;
+            row.innerHTML = `
+                <td>${originalFilename}</td>
+                <td style="color:#bbb;">NA</td>
+                <td><button class="view-button" data-index="${idx}" ${isProcessing ? 'disabled' : ''}>View</button></td>
+            `;
+        });
+        resultsTableBody.querySelectorAll('.view-button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = parseInt(btn.dataset.index, 10);
+                displayImage(idx);
+            });
+        });
     }
 
     // Confidence threshold
@@ -333,35 +323,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Processing
     startProcessingBtn.addEventListener('click', async () => {
-        // Use filteredValidFiles for processing
-        const files = filteredValidFiles;
-        if (!files || files.length === 0) {
+        if (!filteredValidFiles || filteredValidFiles.length === 0) {
             logStatus('Error: No files selected.');
             return;
         }
 
-        const mode = inputMode.value;
         setLoading(true);
-        logStatus('Starting upload and processing...');
-        updateProgress(0, 'Uploading files...');
-        // Do not clear resultsTableBody or preview image so users can browse existing results during processing
-        currentResults = [];
+        logStatus('Starting processing...');
+        updateProgress(0, 'Starting...');
         if (progressInterval) {
             clearInterval(progressInterval);
             progressInterval = null;
         }
 
-        const formData = new FormData();
-        for (const file of files) {
-            formData.append('files', file);
-        }
-        formData.append('input_mode', mode);
-        formData.append('confidence_threshold', confidenceSlider.value);
-
         try {
             const response = await fetch('/process', {
                 method: 'POST',
-                body: formData,
             });
             if (!response.ok) {
                 let errorText = `HTTP error! status: ${response.status}`;
@@ -607,21 +584,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- UI Update Functions ---
     function setLoading(isLoading) {
+        isProcessing = isLoading;
         startProcessingBtn.disabled = isLoading;
         if (isLoading) {
             startProcessingBtn.innerHTML = '<i class="ri-loader-4-line"></i> Processing...';
             document.body.classList.add('processing');
-            // Disable input changes during processing
+            // Disable input changes and View buttons during processing
             inputMode.disabled = true;
             fileInput.disabled = true;
             confidenceSlider.disabled = true;
+            resultsTableBody.querySelectorAll('.view-button').forEach(btn => btn.disabled = true);
         } else {
             startProcessingBtn.innerHTML = '<i class="ri-play-line"></i> Start Processing';
             document.body.classList.remove('processing');
-            // Re-enable inputs after processing
+            // Re-enable inputs and View buttons after processing
             inputMode.disabled = false;
             fileInput.disabled = false;
             confidenceSlider.disabled = false;
+            resultsTableBody.querySelectorAll('.view-button').forEach(btn => btn.disabled = false);
         }
     }
 
@@ -682,43 +662,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (aVal > bVal) return currentSortDirection === 'asc' ? 1 : -1;
             return 0;
         });
-    }
-
-    // Results Display
-    function displayResults(jobStatus, filenameMap, resultsObj) {
-        resultsTableBody.innerHTML = '';
-        currentImageIndex = -1;
-        currentSortField = null;
-        currentSortDirection = 'asc';
-
-        // If job is not completed, show filenames only
-        if (jobStatus !== 'completed') {
-            Object.entries(filenameMap).forEach(([uuid, originalFilename], idx) => {
-                const row = resultsTableBody.insertRow();
-                row.innerHTML = `<td>${originalFilename}</td><td style="color:#bbb;">NA</td>`;
-            });
-            exportCsvBtn.disabled = true;
-            exportImagesBtn.disabled = true;
-            logStatus('Waiting for job to complete...');
-            return;
-        }
-
-        // If job is completed, show filtered detection counts
-        if (resultsObj) {
-            Object.entries(resultsObj).forEach(([uuid, detections], idx) => {
-                // Filter by confidence threshold
-                const threshold = parseFloat(confidenceSlider.value);
-                const filtered = detections.filter(d => d.score >= threshold);
-                const originalFilename = filenameMap[uuid] || uuid;
-                const row = resultsTableBody.insertRow();
-                row.innerHTML = `<td>${originalFilename}</td><td>${filtered.length}</td>`;
-            });
-            exportCsvBtn.disabled = false;
-            exportImagesBtn.disabled = false;
-            logStatus('Job completed. Results displayed.');
-        } else {
-            logStatus('No results found.');
-        }
     }
     
     // Display a specific page of results
@@ -1281,11 +1224,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalEggs = allDetections.reduce((sum, imgResult) => sum + imgResult.detections.filter(det => det.score >= currentConf).length, 0);
         const totalEggsElem = document.getElementById('total-eggs-count');
         if (totalEggsElem) totalEggsElem.textContent = totalEggs;
-    }
-
-    // Call this after processing completes
-    function onProcessingComplete() {
-        renderConfidencePlot();
     }
 
     // Custom dialog for selecting among multiple CSV files

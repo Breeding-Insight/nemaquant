@@ -10,6 +10,9 @@ import csv
 import pickle
 import shutil
 import logging
+import tempfile
+import signal
+import atexit
 from ultralytics import YOLO
 # from ultralytics.utils import ThreadingLocked
 import numpy as np
@@ -33,20 +36,11 @@ log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 APP_ROOT = Path(__file__).parent
-UPLOAD_FOLDER = APP_ROOT / 'uploads'
-RESULTS_FOLDER = APP_ROOT / 'results'
-ANNOT_FOLDER = APP_ROOT / 'annotated'
 WEIGHTS_FILE = APP_ROOT / 'weights.pt'
-app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
-app.config['RESULTS_FOLDER'] = str(RESULTS_FOLDER)
-app.config['ANNOT_FOLDER'] = str(ANNOT_FOLDER)
 app.config['WEIGHTS_FILE'] = str(WEIGHTS_FILE)
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'tif', 'tiff'}
 
-# skip these -- created dirs in dockerfile
-# UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
-# RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
-# ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
+TEMP_DIR_PREFIX = 'nemaquant_'
 
 # Load model once at startup, use CUDA if available
 MODEL_DEVICE = 'cuda' if cuda.is_available() else 'cpu'
@@ -55,6 +49,29 @@ MODEL_DEVICE = 'cuda' if cuda.is_available() else 'cpu'
 # so you can check the progress of an abr
 # maybe there's a better way around this?
 async_results = {}
+
+# Track all active session temp dirs for cleanup on exit/crash
+active_session_dirs = {}
+
+def cleanup_all_temp_dirs():
+    """Remove all active session temp dirs. Called on exit/signal."""
+    for sid, path in list(active_session_dirs.items()):
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+        except Exception:
+            pass
+    active_session_dirs.clear()
+
+atexit.register(cleanup_all_temp_dirs)
+
+def _signal_cleanup(signum, frame):
+    cleanup_all_temp_dirs()
+    # Restore default handler and re-raise to avoid SystemExit interfering with other cleanup
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+# Only handle SIGTERM; SIGINT (Ctrl+C) raises KeyboardInterrupt which triggers atexit
+signal.signal(signal.SIGTERM, _signal_cleanup)
 
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -72,9 +89,9 @@ def index():
 # save the uploaded files
 @app.route('/uploads', methods=['POST'])
 def upload_files():
-    session_id = session['id']
+    temp_dir = session['temp_dir']
     files = request.files.getlist('files')
-    upload_dir = Path(app.config['UPLOAD_FOLDER']) / session_id
+    upload_dir = Path(temp_dir) / 'uploads'
     # clear out any existing files for the session
     if upload_dir.exists():
         shutil.rmtree(upload_dir)
@@ -101,13 +118,13 @@ def preview_image():
     try:
         data = request.get_json()
         uuid = data.get('uuid')
-        session_id = session['id']
+        temp_dir = session['temp_dir']
         uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
         if not img_name:
             print(f"/preview: No img_name found for uuid {uuid}")
             return jsonify({'error': 'File not found'}), 404
-        img_path = Path(app.config['UPLOAD_FOLDER']) / session_id / img_name
+        img_path = Path(temp_dir) / 'uploads' / img_name
         if not img_path.exists():
             print(f"/preview: File does not exist at {img_path}")
             return jsonify({'error': 'File not found'}), 404
@@ -153,14 +170,15 @@ def process_single_image(img_path, results_dir):
 @app.route('/process', methods=['POST'])
 def start_processing():
     session_id = session['id']
+    temp_dir = session['temp_dir']
     job_state = {
         "status": "starting",
         "progress": 0,
         "sessionId": session_id
     }
     session['job_state'] = job_state
-    upload_dir = Path(app.config['UPLOAD_FOLDER']) / session_id
-    results_dir = Path(app.config['RESULTS_FOLDER']) / session_id
+    upload_dir = Path(temp_dir) / 'uploads'
+    results_dir = Path(temp_dir) / 'results'
     # clean out old results if needed
     if results_dir.exists():
         shutil.rmtree(results_dir)
@@ -203,14 +221,15 @@ def start_processing():
 @app.route('/progress')
 def get_progress():
         session_id = session['id']
+        temp_dir = session['temp_dir']
         try:
             job_state = session.get('job_state')
             if not job_state:
                 print("/progress: No job_state found in session.")
                 return jsonify({"status": "error", "error": "No job state"}), 404
 
-            results_dir = Path(app.config['RESULTS_FOLDER']) / session_id
-            uploads_dir = Path(app.config['UPLOAD_FOLDER']) / session_id
+            results_dir = Path(temp_dir) / 'results'
+            uploads_dir = Path(temp_dir) / 'uploads'
             n_results = len(list(results_dir.glob('*.pkl')))
             n_uploads = len(list(uploads_dir.iterdir()))
 
@@ -277,7 +296,7 @@ def annotate_image():
         data = request.get_json()
         uuid = data.get('uuid')
         confidence = float(data.get('confidence', 0.5))
-        session_id = session['id']
+        temp_dir = session['temp_dir']
         uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
         orig_img_name = session['filename_map'].get(uuid)
@@ -285,16 +304,16 @@ def annotate_image():
         if not img_name:
             return jsonify({'error': 'File not found'}), 404
         # Load detections from pickle
-        result_path = Path(app.config['RESULTS_FOLDER']) / session_id / f"{uuid}.pkl"
+        result_path = Path(temp_dir) / 'results' / f"{uuid}.pkl"
         if not result_path.exists():
             return jsonify({'error': 'Results not found'}), 404
         with open(result_path, 'rb') as pf:
             detections = pickle.load(pf)
 
-        img_path = Path(app.config['UPLOAD_FOLDER']) / session_id / img_name
+        img_path = Path(temp_dir) / 'uploads' / img_name
         img = read_img_and_draw(img_path, detections, confidence)
         # Save annotated image out
-        annot_dir = Path(app.config['ANNOT_FOLDER']) / session_id
+        annot_dir = Path(temp_dir) / 'annotated'
         annot_dir.mkdir(parents=True, exist_ok=True)
         annot_imgname = f"{uuid}_annotated.png"
         annot_imgpath = str(annot_dir / annot_imgname)
@@ -316,11 +335,11 @@ def export_images():
     try:
         data = request.get_json()
         confidence = float(data.get('confidence', 0.5))
-        session_id = session['id']
+        temp_dir = session['temp_dir']
         filename_map = session.get('filename_map', {})
         uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
         # ensure there's a landing spot
-        annot_dir = Path(app.config['ANNOT_FOLDER']) / session_id
+        annot_dir = Path(temp_dir) / 'annotated'
         annot_dir.mkdir(parents=True, exist_ok=True)
 
         # add all annotated files to zip
@@ -331,8 +350,8 @@ def export_images():
                 img_name = uuid_map_to_uuid_imgname.get(uuid)
                 if not img_name:
                     continue
-                img_path = Path(app.config['UPLOAD_FOLDER']) / session_id / img_name
-                result_path = Path(app.config['RESULTS_FOLDER']) / session_id / f"{uuid}.pkl"
+                img_path = Path(temp_dir) / 'uploads' / img_name
+                result_path = Path(temp_dir) / 'results' / f"{uuid}.pkl"
                 if not result_path.exists():
                     return jsonify({'error': 'Results not found'}), 404
                 if not img_path.exists():
@@ -366,7 +385,7 @@ def export_images():
 def export_csv():
     try:
         data = request.json
-        session_id = session['id']
+        temp_dir = session['temp_dir']
         job_state = session.get('job_state')
         filename_map = session.get('filename_map')
         threshold = float(data.get('confidence', 0.5))
@@ -374,7 +393,7 @@ def export_csv():
             return jsonify({'error': 'Job not found'}), 404
         
         # iterate through the results
-        results_dir = Path(app.config['RESULTS_FOLDER']) / session_id
+        results_dir = Path(temp_dir) / 'results'
         pkl_paths = list(results_dir.glob('*.pkl'))
         all_results = {}
         for path in pkl_paths:
@@ -411,10 +430,31 @@ def export_csv():
 def ensure_session():
     if 'id' not in session:
         session['id'] = uuid.uuid4().hex
-        print(f"New session started: {session['id']}")
+        base = tempfile.mkdtemp(prefix=f"{TEMP_DIR_PREFIX}{session['id']}_")
+        os.makedirs(os.path.join(base, 'uploads'))
+        os.makedirs(os.path.join(base, 'results'))
+        os.makedirs(os.path.join(base, 'annotated'))
+        session['temp_dir'] = base
+        active_session_dirs[session['id']] = base
+        print(f"New session started: {session['id']} at {base}")
     else:
         pass
         # print(f"Existing session: {session['id']}")
+
+
+def cleanup_stale_sessions(max_age_hours=4):
+    """Remove nemaquant temp dirs orphaned by crashes."""
+    tmp_root = tempfile.gettempdir()
+    now = time.time()
+    for entry in Path(tmp_root).iterdir():
+        if entry.is_dir() and entry.name.startswith(TEMP_DIR_PREFIX):
+            try:
+                mtime = entry.stat().st_mtime
+                if now - mtime > max_age_hours * 3600:
+                    shutil.rmtree(entry, ignore_errors=True)
+                    print(f"Cleaned up stale session dir: {entry}")
+            except Exception:
+                pass
 
 
 def print_startup_info():
@@ -452,17 +492,9 @@ def print_startup_info():
             else:
                 print(f"Directory {path_str} does not exist.")
 
-    # some cleanup steps - not sure quite where to put these
-    print('Running periodic cleanup of old sessions...')
-    # Cleanup old session folders
-    max_age_hours = 4
-    now = time.time()
-    for base_dir in [UPLOAD_FOLDER, RESULTS_FOLDER, ANNOT_FOLDER]:
-        for session_dir in Path(base_dir).iterdir():
-            if session_dir.is_dir():
-                mtime = session_dir.stat().st_mtime
-                if now - mtime > max_age_hours * 3600:
-                    shutil.rmtree(session_dir)
+    # Cleanup stale nemaquant temp dirs orphaned by crashes
+    print('Running cleanup of stale temp session dirs...')
+    cleanup_stale_sessions()
     
     print('App is running at the following local addresses:',
           'http://127.0.0.1:7860⁠',
