@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 import traceback
 import sys
 import time
@@ -11,13 +12,12 @@ import pickle
 import shutil
 import logging
 from ultralytics import YOLO
-# from ultralytics.utils import ThreadingLocked
 import numpy as np
 import pandas as pd
 from torch import cuda
 from flask import Flask, Response, render_template, request, jsonify, send_file, session
 from multiprocessing.pool import Pool
-from multiprocessing import set_start_method
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image
 from datetime import datetime
@@ -25,17 +25,36 @@ from werkzeug.utils import secure_filename
 from yolo_utils import detect_in_image
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', str(uuid.uuid4()))  # For session security
+_secret_key = os.environ.get('FLASK_SECRET_KEY')
+if not _secret_key:
+    # Fallback for local dev only — sessions won't persist across restarts.
+    # On HF Spaces, set FLASK_SECRET_KEY as a Space secret to avoid session loss between workers.
+    _secret_key = str(uuid.uuid4())
+    print("WARNING: FLASK_SECRET_KEY not set — using random key. Sessions will break across workers/restarts.")
+else:
+    print(f"INFO: FLASK_SECRET_KEY is set (length={len(_secret_key)})")
+app.secret_key = _secret_key
 
-# disable werkzeug logging - too noisy
+# HF Spaces serves over HTTPS via a reverse proxy and may embed the app in an iframe.
+# SameSite=None;Secure is required so cookies are sent in cross-site/iframe POST requests.
+# HF sets SPACE_HOST env var; fall back to checking SPACE_ID or SPACE_AUTHOR_NAME.
+_on_https = any(os.environ.get(v) for v in ('SPACE_HOST', 'SPACE_ID', 'SPACE_AUTHOR_NAME'))
+app.config['SESSION_COOKIE_SECURE'] = _on_https
+app.config['SESSION_COOKIE_SAMESITE'] = 'None' if _on_https else 'Lax'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+print(f"INFO: SESSION_COOKIE_SECURE={_on_https}, SAMESITE={'None' if _on_https else 'Lax'}")
 # comment out these lines if you want to see full logs
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 APP_ROOT = Path(__file__).parent
-UPLOAD_FOLDER = APP_ROOT / 'uploads'
-RESULTS_FOLDER = APP_ROOT / 'results'
-ANNOT_FOLDER = APP_ROOT / 'annotated'
+# Use /tmp for runtime data — works reliably on all container platforms.
+# /tmp is RAM-backed tmpfs, always writable, avoids overlay filesystem issues on HF Spaces.
+# Note: /tmp is cleared on container restart (uploads/results are transient by design).
+UPLOAD_FOLDER = Path('/tmp/nemaquant/uploads')
+RESULTS_FOLDER = Path('/tmp/nemaquant/results')
+ANNOT_FOLDER = Path('/tmp/nemaquant/annotated')
+SESSION_META_FOLDER = Path('/tmp/nemaquant/sessions')
 WEIGHTS_FILE = APP_ROOT / 'weights.pt'
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['RESULTS_FOLDER'] = str(RESULTS_FOLDER)
@@ -43,17 +62,61 @@ app.config['ANNOT_FOLDER'] = str(ANNOT_FOLDER)
 app.config['WEIGHTS_FILE'] = str(WEIGHTS_FILE)
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'tif', 'tiff'}
 
-# skip these -- created dirs in dockerfile
-# UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
-# RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
-# ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
+# Create dirs at startup
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+RESULTS_FOLDER.mkdir(parents=True, exist_ok=True)
+ANNOT_FOLDER.mkdir(parents=True, exist_ok=True)
+SESSION_META_FOLDER.mkdir(parents=True, exist_ok=True)
+# YOLO_CONFIG_DIR points to /tmp/nemaquant/.yolo_config (set in Dockerfile ENV).
+# Create it here so ultralytics can write its cache on read-only container filesystems
+# (e.g. Apptainer SIF images).
+Path(os.environ.get('YOLO_CONFIG_DIR', '/tmp/nemaquant/.yolo_config')).mkdir(parents=True, exist_ok=True)
+print(f"Data root: /tmp/nemaquant | Weights: {WEIGHTS_FILE}")
+
+# ---------------------------------------------------------------------------
+# Session metadata helpers
+# Flask's client-side cookie is limited to ~4KB. When many images are
+# uploaded, filename_map / uuid_map_to_uuid_imgname can overflow.
+# We persist them to disk so every route can recover them even when the
+# cookie is absent or truncated (e.g. large batches, Apptainer --cleanenv,
+# multi-worker gunicorn).
+# ---------------------------------------------------------------------------
+def _save_session_meta(session_id, filename_map, uuid_map):
+    meta_dir = SESSION_META_FOLDER / session_id
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    with open(meta_dir / 'meta.json', 'w') as fh:
+        json.dump({'filename_map': filename_map, 'uuid_map_to_uuid_imgname': uuid_map}, fh)
+
+def _load_session_meta(session_id):
+    meta_path = SESSION_META_FOLDER / session_id / 'meta.json'
+    if meta_path.exists():
+        with open(meta_path) as fh:
+            return json.load(fh)
+    return {}
 
 # Load model once at startup, use CUDA if available
 MODEL_DEVICE = 'cuda' if cuda.is_available() else 'cpu'
 
-# need a global dict to hold async results objects
-# so you can check the progress of an abr
-# maybe there's a better way around this?
+# For GPU: load the model globally at startup so threads can reuse it without
+# re-initialising CUDA (forked Pool workers cannot re-init CUDA in the child).
+# For CPU: model is loaded per-worker in init_worker() instead.
+_gpu_model = None
+if MODEL_DEVICE == 'cuda':
+    _gpu_model = YOLO(str(WEIGHTS_FILE))
+    _gpu_model.to('cuda')
+    print(f'GPU model loaded at startup on {MODEL_DEVICE}')
+
+# Wrapper so GPU futures (concurrent.futures.Future) expose the same
+# .ready() interface as multiprocessing AsyncResult.
+class _FutureWrapper:
+    def __init__(self, future):
+        self._f = future
+    def ready(self):
+        return self._f.done()
+    def get(self):
+        return self._f.result()
+
+# Global dict mapping session_id -> async result (Pool AsyncResult or _FutureWrapper)
 async_results = {}
 
 @app.errorhandler(Exception)
@@ -61,9 +124,6 @@ def handle_exception(e):
     print(f"Unhandled exception: {str(e)}")
     print(traceback.format_exc())
     return jsonify({"error": "Server error", "log": str(e)}), 500
-
-# def allowed_file(filename):
-#     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
 @app.route('/')
 def index():
@@ -93,7 +153,9 @@ def upload_files():
         uuid_map_to_uuid_imgname[uuid_base] = uuid_name
     session['filename_map'] = filename_map
     session['uuid_map_to_uuid_imgname'] = uuid_map_to_uuid_imgname
-    return jsonify({'filename_map': filename_map, 'status': 'uploaded'})
+    # Persist to disk — cookie may be silently dropped if it exceeds ~4KB
+    _save_session_meta(session_id, filename_map, uuid_map_to_uuid_imgname)
+    return jsonify({'filename_map': filename_map, 'session_id': session_id, 'status': 'uploaded'})
 
 # /preview route for serving original uploaded image
 @app.route('/preview', methods=['POST'])
@@ -101,8 +163,10 @@ def preview_image():
     try:
         data = request.get_json()
         uuid = data.get('uuid')
-        session_id = session['id']
-        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
+        # Prefer client-supplied session_id (cookie may differ on HF Spaces HTTPS proxy)
+        session_id = data.get('session_id') or session['id']
+        _meta = _load_session_meta(session_id)
+        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
         if not img_name:
             print(f"/preview: No img_name found for uuid {uuid}")
@@ -132,15 +196,12 @@ def preview_image():
         return jsonify({'error': str(e)}), 500
 
 # initializer for Pool to load model in each process
-# each worker will have its own model instance
+# each worker will have its own model instance (CPU only)
 def init_worker(model_path):
     global model
     model = YOLO(model_path)
-    if MODEL_DEVICE == 'cuda':
-        model.to('cuda')
 
-# not sure if we need this decorator anymore?
-#@ThreadingLocked()
+# CPU pool worker — uses per-worker model loaded by init_worker()
 def process_single_image(img_path, results_dir):
     global model
     uuid_base = img_path.stem
@@ -150,9 +211,31 @@ def process_single_image(img_path, results_dir):
         pickle.dump(results, pf)
     return uuid_base
 
+# GPU thread worker — reuses the global _gpu_model loaded at startup
+def process_single_image_thread(img_path, results_dir):
+    global _gpu_model
+    uuid_base = img_path.stem
+    pickle_path = results_dir / f"{uuid_base}.pkl"
+    results = detect_in_image(_gpu_model, str(img_path))
+    with open(pickle_path, 'wb') as pf:
+        pickle.dump(results, pf)
+    return uuid_base
+
 @app.route('/process', methods=['POST'])
 def start_processing():
     session_id = session['id']
+    # The client echoes back the session_id it received from /uploads.
+    # On HF Spaces the session cookie can be missing on subsequent requests
+    # (HTTPS proxy / SameSite), so we fall back to the client-supplied id
+    # when the cookie-based id doesn't have an upload directory.
+    client_session_id = request.form.get('session_id', '')
+    if client_session_id:
+        # Prefer the client-supplied id unconditionally — it's the authoritative
+        # id from the /uploads call; the cookie may point to a different worker session.
+        client_dir = Path(app.config['UPLOAD_FOLDER']) / client_session_id
+        if client_dir.exists() or not (Path(app.config['UPLOAD_FOLDER']) / session_id).exists():
+            session_id = client_session_id
+            session['id'] = session_id
     job_state = {
         "status": "starting",
         "progress": 0,
@@ -161,31 +244,43 @@ def start_processing():
     session['job_state'] = job_state
     upload_dir = Path(app.config['UPLOAD_FOLDER']) / session_id
     results_dir = Path(app.config['RESULTS_FOLDER']) / session_id
-    # clean out old results if needed
-    if results_dir.exists():
-        shutil.rmtree(results_dir)
-    results_dir.mkdir(parents=True)
-
-    # set up iterable of uploaded files to process
-    arg_list = [(x,results_dir) for x in list(upload_dir.iterdir())]
 
     try:
+        # Fail fast with a clear message if the upload directory is missing
+        if not upload_dir.exists():
+            available = [d.name for d in Path(app.config['UPLOAD_FOLDER']).iterdir()] \
+                if Path(app.config['UPLOAD_FOLDER']).exists() else []
+            msg = (f"Upload directory not found: {upload_dir}. "
+                   f"cookie_session={session['id']}, client_session={request.form.get('session_id','')}, "
+                   f"available={available}")
+            print(f"ERROR /process: {msg}")
+            return jsonify({'error': msg}), 500
+
+        # clean out old results if needed
+        if results_dir.exists():
+            shutil.rmtree(results_dir)
+        results_dir.mkdir(parents=True)
+
+        # set up iterable of uploaded files to process
+        arg_list = [(x, results_dir) for x in list(upload_dir.iterdir())]
+
         if MODEL_DEVICE == 'cuda':
-            n_proc = 1
+            # GPU: run in a single thread so CUDA is never re-initialised in a
+            # forked subprocess (Pool uses fork by default, which breaks CUDA).
+            def _gpu_task():
+                for img_path, res_dir in arg_list:
+                    process_single_image_thread(img_path, res_dir)
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(_gpu_task)
+            executor.shutdown(wait=False)
+            async_results[session_id] = _FutureWrapper(future)
         else:
             n_proc = os.cpu_count()
-            # Initialize job state
-        job_state = {
-            "status": "starting",
-            "progress": 0,
-            "started": True
-        }
-        session['job_state'] = job_state
-        pool = Pool(processes=n_proc,
-                  initializer=init_worker,
-                  initargs=(str(WEIGHTS_FILE),))
-        async_results[session_id] = pool.starmap_async(process_single_image, arg_list)
-        pool.close()
+            pool = Pool(processes=n_proc,
+                      initializer=init_worker,
+                      initargs=(str(WEIGHTS_FILE),))
+            async_results[session_id] = pool.starmap_async(process_single_image, arg_list)
+            pool.close()
 
         # Update job state after process launch
         job_state["status"] = "processing"
@@ -203,8 +298,16 @@ def start_processing():
 @app.route('/progress')
 def get_progress():
         session_id = session['id']
+        # Accept client-supplied session_id as fallback (cookie may be missing on HF Spaces)
+        client_session_id = request.args.get('session_id', '')
+        if client_session_id and session_id not in async_results and client_session_id in async_results:
+            session_id = client_session_id
+            session['id'] = session_id
         try:
             job_state = session.get('job_state')
+            # If session lost job_state but we have an async_result, reconstruct from disk
+            if not job_state and session_id in async_results:
+                job_state = {'status': 'processing', 'progress': 0, 'sessionId': session_id}
             if not job_state:
                 print("/progress: No job_state found in session.")
                 return jsonify({"status": "error", "error": "No job state"}), 404
@@ -221,10 +324,12 @@ def get_progress():
                     job_state['status'] = 'completed'
                     job_state['progress'] = 100
                     session['job_state'] = job_state
+                    _meta = _load_session_meta(session_id)
+                    _filename_map = session.get('filename_map') or _meta.get('filename_map', {})
                     resp = {
                         'status': 'completed',
                         'progress': 100,
-                        'filename_map': session.get('filename_map', {}),
+                        'filename_map': _filename_map,
                         'session_id': job_state.get('sessionId'),
                         'error': job_state.get('error'),
                     }
@@ -277,10 +382,12 @@ def annotate_image():
         data = request.get_json()
         uuid = data.get('uuid')
         confidence = float(data.get('confidence', 0.5))
-        session_id = session['id']
-        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
+        # Prefer client-supplied session_id (cookie may differ on HF Spaces HTTPS proxy)
+        session_id = data.get('session_id') or session['id']
+        _meta = _load_session_meta(session_id)
+        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         img_name = uuid_map_to_uuid_imgname.get(uuid)
-        orig_img_name = session['filename_map'].get(uuid)
+        orig_img_name = (session.get('filename_map') or _meta.get('filename_map', {})).get(uuid)
 
         if not img_name:
             return jsonify({'error': 'File not found'}), 404
@@ -316,9 +423,10 @@ def export_images():
     try:
         data = request.get_json()
         confidence = float(data.get('confidence', 0.5))
-        session_id = session['id']
-        filename_map = session.get('filename_map', {})
-        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname', {})
+        session_id = data.get('session_id') or session['id']
+        _meta = _load_session_meta(session_id)
+        filename_map = session.get('filename_map') or _meta.get('filename_map', {})
+        uuid_map_to_uuid_imgname = session.get('uuid_map_to_uuid_imgname') or _meta.get('uuid_map_to_uuid_imgname', {})
         # ensure there's a landing spot
         annot_dir = Path(app.config['ANNOT_FOLDER']) / session_id
         annot_dir.mkdir(parents=True, exist_ok=True)
@@ -366,9 +474,10 @@ def export_images():
 def export_csv():
     try:
         data = request.json
-        session_id = session['id']
+        session_id = data.get('session_id') or session['id']
         job_state = session.get('job_state')
-        filename_map = session.get('filename_map')
+        _meta = _load_session_meta(session_id)
+        filename_map = session.get('filename_map') or _meta.get('filename_map', {})
         threshold = float(data.get('confidence', 0.5))
         if not job_state:
             return jsonify({'error': 'Job not found'}), 404
@@ -386,7 +495,7 @@ def export_csv():
         rows = []
         for uuid in all_results.keys():
             count = sum(1 for d in all_results[uuid] if d['score'] >= threshold)
-            rows.append({'Filename': filename_map[uuid], 'EggsDetected': count, 'ConfidenceThreshold': threshold})
+            rows.append({'Filename': filename_map.get(uuid, uuid), 'EggsDetected': count, 'ConfidenceThreshold': threshold})
         rows = sorted(rows, key=lambda x: x['Filename'].lower())
         # write the CSV out
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -411,10 +520,6 @@ def export_csv():
 def ensure_session():
     if 'id' not in session:
         session['id'] = uuid.uuid4().hex
-        print(f"New session started: {session['id']}")
-    else:
-        pass
-        # print(f"Existing session: {session['id']}")
 
 
 def print_startup_info():
@@ -441,16 +546,15 @@ def print_startup_info():
         except AttributeError:
             print("User running process: UID/GID not available on this OS")
         
-        for path_str in ["/app/uploads", "/app/results"]:
-            path_obj = Path(path_str)
+        for path_obj in [UPLOAD_FOLDER, RESULTS_FOLDER, ANNOT_FOLDER]:
             if path_obj.exists():
                 stat_info = path_obj.stat()
                 permissions = oct(stat_info.st_mode)[-3:]
                 owner = f"{stat_info.st_uid}:{stat_info.st_gid}"
-                print(f"Permissions for {path_str}: {permissions}")
-                print(f"Owner for {path_str}: {owner}")
+                print(f"Permissions for {path_obj}: {permissions}")
+                print(f"Owner for {path_obj}: {owner}")
             else:
-                print(f"Directory {path_str} does not exist.")
+                print(f"Directory {path_obj} does not exist.")
 
     # some cleanup steps - not sure quite where to put these
     print('Running periodic cleanup of old sessions...')

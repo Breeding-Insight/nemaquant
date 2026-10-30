@@ -1,0 +1,53 @@
+# GPU image following HF Spaces guidelines: https://huggingface.co/docs/hub/spaces-sdks-docker
+# Use: docker build -f Dockerfile.gpu -t cristaniguti/nemaquant:gpu .
+# Requires nvidia-container-toolkit on the host (provided by HF Spaces GPU instances).
+# PyTorch CUDA wheels bundle their own cuDNN/CUDA libs, so base variant is sufficient.
+FROM nvidia/cuda:12.8.1-base-ubuntu24.04
+
+# Install Python 3.12 and pip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python3.12 the default python
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+# add new user with ID 1000 to avoid permission issues on HF spaces
+# Rename the existing UID 1000 user ('ubuntu') to 'user' for HF Spaces compatibility
+RUN usermod -l user ubuntu && usermod -d /home/user -m user
+USER user
+
+# Set home to user's home dir and add local bin to PATH
+# PYTHONPATH is set explicitly so packages are found even when HOME is overridden
+# (e.g. by Apptainer --cleanenv, which resets HOME to the host user's home)
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH \
+    PYTHONPATH=/home/user/.local/lib/python3.12/site-packages
+
+# Set the working directory in the container
+WORKDIR $HOME/app
+
+COPY --chown=user ./requirements.txt .
+RUN pip install --no-cache-dir --break-system-packages torch==2.7.1 torchvision --index-url https://download.pytorch.org/whl/cu128
+RUN pip install --no-cache-dir --break-system-packages --only-binary :all: -r requirements.txt
+# Force headless opencv after ultralytics (which pulls in full opencv-python as a dependency)
+RUN pip install --no-cache-dir --break-system-packages --force-reinstall opencv-python-headless==4.13.0.92
+
+# Copy the current directory contents into the container
+COPY --chown=user . $HOME/app
+
+# Create the necessary dirs
+RUN mkdir -p uploads results annotated .yolo_config
+
+# Point YOLO config to /tmp so it is writable under Apptainer (read-only SIF)
+# and HF Spaces. /home/user/app/.yolo_config is kept in the image but only used
+# as a fallback when the container filesystem is writable (plain Docker).
+ENV YOLO_CONFIG_DIR=/tmp/nemaquant/.yolo_config
+
+EXPOSE 7860
+
+CMD ["python", "/home/user/app/app.py"]
